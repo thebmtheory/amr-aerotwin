@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amr-aerotwin"
+version = "0.1.0"
+description = "Physics-Informed Reduced-Order & Surrogate Modeling Platform for Track-to-Simulation Aero Correlation and Setup Optimization"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Aston Martin F1 Vehicle Science Candidate" }
+]
+dependencies = [
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "scipy>=1.12.0",
+    "scikit-learn>=1.4.0",
+    "fastf1>=3.3.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "pydantic>=2.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+    "ruff>=0.3.0",
+    "mypy>=1.9.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["backend/src"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend/src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
