@@ -105,7 +105,8 @@ def position_matched_deficit_kw(
     per_team = {}
     for t, sts in states_by_team.items():
         stack = [np.where(lap_samples(st, mask), st.ax_propulsive_ms2, np.nan) for st in sts]
-        with np.errstate(all="ignore"):
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # positions this team's cars did not use
             per_team[t] = np.nanmean(np.vstack(stack), axis=0)
     if team not in per_team or len(per_team) < 5:
         return float("nan")
@@ -253,4 +254,4 @@ def wind_rotation_test(states: dict[str, VehicleState], ref: VehicleState, min_w
             w = decompose_aero_wind_vectors(st.speed_smooth_ms, st.heading_rad, amb)
             return 0.5 * st.rho_kg_m3 * w["v_airspeed_ms"] ** 2
         rel[a] = sse(q_air) / ground
-    return {"wind_ms": wind, "relative_sse": rel, "best_rotation_deg": int(min(rel, key=rel.get))}
+    return {"wind_ms": wind, "relative_sse": rel, "best_rotation_deg": int(min(rel, key=lambda k: rel[k]))}

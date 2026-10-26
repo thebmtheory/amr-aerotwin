@@ -627,7 +627,7 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
         if target in st_boot and len(st_boot) > 1:
             rivals = [t for t in st_boot if t != target]
             point = {t: teams_out[t]["rate_pct"][teams_out[t]["sections"].index("straights")] for t in rivals}
-            nxt = max(point, key=point.get)
+            nxt = max(point, key=lambda t: point[t])
             t_rate = teams_out[target]["rate_pct"][teams_out[target]["sections"].index("straights")]
             best_rival = np.max(np.column_stack([st_boot[t] for t in rivals]), axis=1)
             ratio_b = st_boot[target] / np.where(best_rival > 1e-9, best_rival, np.nan)

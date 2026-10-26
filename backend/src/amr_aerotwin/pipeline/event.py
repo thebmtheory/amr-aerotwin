@@ -34,7 +34,7 @@ from amr_aerotwin.modeling.lap_compare import compare_laps
 from amr_aerotwin.modeling.pod import PODReducedOrderModel
 from amr_aerotwin.modeling.powertrain import event_power_drag_rows, wind_rotation_test
 from amr_aerotwin.modeling.race_pace import fit_race_pace
-from amr_aerotwin.modeling.validation import check_lap, expected_turn_count, geometry_ok
+from amr_aerotwin.modeling.validation import car_data_stall_kmh, check_lap, expected_turn_count, geometry_ok
 from amr_aerotwin.physics.dynamics import (
     HIGH_SPEED_CORNER,
     STRAIGHT,
@@ -111,6 +111,10 @@ def prefetch_event(repo: TelemetryRepository, year: int, event: str, workers: in
         list(pool.map(get, jobs))
 
 
+def _sector(r: pd.Series, col: str) -> float:
+    return float(r[col]) if pd.notna(r[col]) else float("nan")
+
+
 def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[dict[str, AlignedLap], Any, pd.DataFrame, list[str]]:
     laps = repo.session_laps(year, event, QUALI)
     amb = repo.session_ambient(year, event, QUALI)
@@ -135,19 +139,24 @@ def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[
     out: dict[str, AlignedLap] = {}
     for drv in sorted(valid["drv"].unique()):
         r = fastest_valid_lap(laps, drv)
+        if r is None:
+            continue
         try:
             raw = parse_raw_lap(repo.lap_telemetry(year, event, QUALI, drv, int(r["lap"])))
             meta = LapMeta(
                 season=year, event=event, session=QUALI, driver=drv, team=str(r["team"]),
                 lap_number=int(r["lap"]), lap_time_s=float(r["time"]), compound=str(r["compound"]),
                 tyre_life_laps=int(r["life"]) if pd.notna(r["life"]) else 1,
-                sector_times_s=tuple(float(r[c]) if pd.notna(r[c]) else np.nan for c in ("s1", "s2", "s3")),
+                sector_times_s=(_sector(r, "s1"), _sector(r, "s2"), _sector(r, "s3")),
                 speed_trap_kmh=float(r["vst"]) if pd.notna(r["vst"]) else np.nan,
                 team_color=colors.get(drv, "#777777"),
             )
             out[drv] = align_lap(raw, meta, lap_ambient(r, amb), ref)
         except (DataUnavailableError, ValueError) as err:
             warnings.append(f"{drv}: {err}")
+    # Car-data stalls can only be seen against the rest of the field at the same place
+    for drv, v in car_data_stall_kmh(out).items():
+        out[drv].quality["car_data_stall_kmh"] = v
     return out, ref, laps, warnings
 
 
@@ -432,9 +441,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     # ------------------------------------------------------------------ lap sim calibration + sensitivities
     sims = {}
     if geo_ok:
-        for d in dict.fromkeys([pole_drv, amr_best]):
-            if d is None:
-                continue
+        for d in dict.fromkeys(x for x in (pole_drv, amr_best) if x is not None):
             try:
                 sims[d] = _calibrate(states[d], kappa, regs.has_drs, mh=run_mcmc and d == amr_best)
             except Exception as err:  # noqa: BLE001 - one failed fit must not drop the event

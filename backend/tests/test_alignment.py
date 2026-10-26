@@ -118,3 +118,33 @@ def test_invalid_throttle_marker_is_repaired_not_kept():
     lap = parse_raw_lap(raw)
     assert lap.throttle_pct.max() <= 100.0
     assert 0.0 in lap.throttle_pct  # braking sample read as zero throttle
+
+
+def test_car_data_stall_check_flags_a_held_speed_channel_only(fixture_repo):
+    """A real Silverstone lap scores near zero; the same lap with its speed channel held through a
+    braking zone and then jumping (a car-data stall) fails the check, and the others do not move."""
+    import dataclasses
+
+    from amr_aerotwin.modeling.validation import LAP_CHECKS, car_data_stall_kmh, check_lap
+    from amr_aerotwin.pipeline.event import _load_quali_laps
+
+    laps, *_ = _load_quali_laps(fixture_repo, 2025, "British Grand Prix")
+    lo, hi = LAP_CHECKS["car_data_stall_kmh"][1:]
+    clean = {d: lp.quality["car_data_stall_kmh"] for d, lp in laps.items()}
+    assert all(lo <= v <= hi for v in clean.values()), clean
+
+    d0 = sorted(laps)[0]
+    lp = laps[d0]
+    v = lp.speed_ms.copy()
+    # Hardest braking zone: largest speed drop over 100 m; hold the pre-braking speed through it
+    k = int(round(100.0 / (lp.distance_m[1] - lp.distance_m[0])))
+    i = int(np.argmax(v[:-k] - v[k:]))
+    v[i:i + k] = v[i]
+    stalled = dict(laps)
+    stalled[d0] = dataclasses.replace(lp, speed_ms=v, quality=dict(lp.quality))
+    score = car_data_stall_kmh(stalled)
+    assert score[d0] > hi
+    stalled[d0].quality["car_data_stall_kmh"] = score[d0]
+    assert not check_lap(stalled[d0]).passed
+    others = [abs(score[d] - clean[d]) for d in laps if d != d0]
+    assert max(others) < 10.0  # one bad lap barely moves the field median

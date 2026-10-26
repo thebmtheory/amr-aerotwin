@@ -17,8 +17,10 @@ jobs:
           node-version: "20"
       - name: Install
         run: pip install -e ".[dev]"
-      - name: Lint
-        run: ruff check backend
+      - name: Lint and type check
+        run: |
+          ruff check backend
+          mypy backend/src --ignore-missing-imports
       - name: Tests (offline, uses the bundled Silverstone fixture)
         env:
           AEROTWIN_OFFLINE: "1"

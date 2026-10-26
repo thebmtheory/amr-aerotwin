@@ -11,6 +11,7 @@ test:
 
 lint:
 	$(PY) -m ruff check backend
+	$(PY) -m mypy backend/src --ignore-missing-imports
 
 fetch:
 	$(PY) -m amr_aerotwin.cli fetch

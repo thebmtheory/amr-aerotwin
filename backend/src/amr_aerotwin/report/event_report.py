@@ -288,6 +288,15 @@ def event_report_data(
             "season_rates": {y: season.get("section_rates", {}).get(y, {}).get(target) for y in blocks}}
 
 
+def report_events(reports_dir: Path, processed_dir: Path = PROCESSED_DIR) -> list[str]:
+    """Events that already have a report page in `reports_dir` (by slug), from the calendar."""
+    cal = processed_dir / "calendar.csv"
+    if not Path(reports_dir).is_dir() or not cal.exists():
+        return []
+    have = {f.stem for f in Path(reports_dir).glob("*.html")}
+    return sorted({e for e in pd.read_csv(cal)["event"].astype(str) if slug(e) in have})
+
+
 def render_event_report(data: dict[str, Any]) -> str:
     """The page body (title, styles, markup, scripts) with the data embedded."""
     page = (STATIC / "event_report.html").read_text(encoding="utf-8")

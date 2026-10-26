@@ -9,6 +9,7 @@ additivity is bookkeeping, not validation; the validation of the alignment itsel
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -68,7 +69,7 @@ def compare_laps(
             "apex": (d >= APEX_M[0]) & (d < APEX_M[1]),
             "exit": (d >= EXIT_M[0]) & (d < EXIT_M[1]),
         }
-        row = {"corner": label, "distance_m": float(c_s)}
+        row: dict[str, Any] = {"corner": label, "distance_m": float(c_s)}
         window = np.abs(d) <= 60.0
         v_t_min = float(np.min(target.speed_ms[window]) * 3.6)
         v_r_min = float(np.min(reference.speed_ms[window]) * 3.6)

@@ -47,6 +47,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline
 .nav { display: flex; gap: 4px 14px; flex-wrap: wrap; flex: 1 1 auto; }
 .nav a { font: 500 var(--step--1)/1 var(--font-body); color: var(--ink-2); text-decoration: none; padding: 6px 0; }
 .nav a:hover { color: var(--ink); }
+.nav a.nav-report { color: var(--amr); font-weight: 600; }
 
 h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
 h1 { font-weight: 600; font-size: var(--step-3); line-height: 1.05; max-width: 24ch; }
@@ -123,6 +124,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
       <a href="#race">Race</a>
       <a href="#context">In context</a>
       <a href="#method">Method</a>
+      <a href="../" id="season-link" class="nav-report" hidden>Season report</a>
     </nav>
   </div>
 </header>
@@ -744,6 +746,8 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     renderOrder(t); renderSections(t); renderTrace(t); renderCorners(t); renderStraights(t); renderGrip(t); renderRace(t);
   }
   function renderAll() { hero(); renderSeason(); renderContext(theme()); renderNotes(); syncBar(); }
+  // Inside the season site this page lives at reports/<event>.html; standalone it has no parent page
+  if (/\/reports\/[^/]+$/.test(location.pathname)) $("season-link").hidden = false;
   function syncBar() {
     var mh = document.querySelector(".masthead");
     var h = getComputedStyle(mh).position === "sticky" ? mh.offsetHeight : 0;

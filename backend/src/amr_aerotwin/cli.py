@@ -32,16 +32,19 @@ def main(argv: list[str] | None = None) -> None:
         build(args.years, args.cache, args.out, args.processes, run_mcmc=not args.no_mcmc)
     if args.command in ("analyse", "all"):
         analyse(args.out)
+    if args.command in ("report", "all", "event-report"):
+        from amr_aerotwin.report.event_report import build_event_report, report_events
+
+        # `event-report` builds the named event; `report` refreshes every event report that exists
+        for ev in [args.event] if args.command == "event-report" else report_events(args.reports, args.out):
+            logging.info("wrote %s", build_event_report(ev, args.reports, args.out))
     if args.command in ("report", "all"):
         from amr_aerotwin.report.build import build_site
-        from amr_aerotwin.report.note import build_note
+        from amr_aerotwin.report.note import build_note, update_readme
 
-        build_site(args.out, args.site)
+        build_site(args.out, args.site, args.reports)
         build_note(args.out / "season.json", args.site.parent / "docs" / "technical_note.md")
-    if args.command == "event-report":
-        from amr_aerotwin.report.event_report import build_event_report
-
-        logging.info("wrote %s", build_event_report(args.event, args.reports, args.out))
+        update_readme(args.out / "season.json", args.site.parent / "README.md")
     logging.info("done in %.0f s", time.time() - t0)
 
 

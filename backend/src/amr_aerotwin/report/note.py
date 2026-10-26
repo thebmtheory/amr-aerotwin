@@ -7,13 +7,19 @@ from pathlib import Path
 from typing import Any
 
 TARGET = "Aston Martin"
+README_BLOCKS = ("findings", "gates")
 
 
 def _f(x: Any, d: int = 1) -> str:
+    """Fixed decimals with a typographic minus; 'n/a' for missing values."""
     try:
-        return f"{float(x):.{d}f}"
+        v = float(x)
     except (TypeError, ValueError):
         return "n/a"
+    if v != v:
+        return "n/a"
+    out = f"{v:.{d}f}"
+    return "−" + out[1:] if out.startswith("-") and any(c not in "-0." for c in out) else out.lstrip("-")
 
 
 def _pm(x: Any, d: int = 1) -> str:
@@ -24,21 +30,30 @@ def _pm(x: Any, d: int = 1) -> str:
     return f"{'+' if v > 0 else '−' if v < 0 else ''}{abs(v):.{d}f}"
 
 
+def _sec(rates: dict[str, Any], season: str, team: str, name: str) -> dict[str, float]:
+    r = rates.get(season, {}).get(team, {})
+    if name not in r.get("sections", []):
+        return {}
+    i = r["sections"].index(name)
+    return {"v": r["rate_pct"][i], "lo": r["ci_lo"][i], "hi": r["ci_hi"][i]}
+
+
+def _others(rates: dict[str, Any], season: str, off_pace: bool = False) -> dict[str, dict[str, Any]]:
+    """Other teams with five or more events; off_pace keeps those at least 1% off pole over a
+    lap, where the straights-to-corners ratio is stable (near the front its denominator is ~0)."""
+    return {t: v for t, v in rates.get(season, {}).items()
+            if t != TARGET and v.get("n_events", 0) >= 5 and (not off_pace or v.get("lap_rate_pct", 0) >= 1)}
+
+
 def build_note(season_json: Path, out_md: Path) -> Path:
     s = json.loads(Path(season_json).read_text())
     rates = s.get("section_rates", {})
 
     def sec(season: str, team: str, name: str) -> dict[str, float]:
-        r = rates.get(season, {}).get(team, {})
-        if name not in r.get("sections", []):
-            return {}
-        i = r["sections"].index(name)
-        return {"v": r["rate_pct"][i], "lo": r["ci_lo"][i], "hi": r["ci_hi"][i]}
+        return _sec(rates, season, team, name)
 
     def others(season: str, off_pace: bool = False) -> list[dict[str, Any]]:
-        # off_pace: teams at least 1% off pole over a lap, where the straights/corners ratio is stable
-        return [v for t, v in rates.get(season, {}).items()
-                if t != TARGET and v.get("n_events", 0) >= 5 and (not off_pace or v.get("lap_rate_pct", 0) >= 1)]
+        return list(_others(rates, season, off_pace).values())
 
     a26, a25, cad = rates.get("2026", {}).get(TARGET, {}), rates.get("2025", {}).get(TARGET, {}), rates.get("2026", {}).get("Cadillac", {})
     st26, cad_st = sec("2026", TARGET, "straights"), sec("2026", "Cadillac", "straights")
@@ -50,6 +65,7 @@ def build_note(season_json: Path, out_md: Path) -> Path:
     sp25 = s.get("straight_profile", {}).get("2025", {}).get(TARGET, {})
     b0 = (sp26.get("bins") or [{}])[0]
     ds = s.get("deficit_summary", {}).get("2026", {})
+    ds25 = s.get("deficit_summary", {}).get("2025", {})
     up = next((u for u in s.get("upgrade_components", []) if u["season"] == 2026), None)
     cp = s["changepoints"].get("2026", {})
     vs = s["variance_split"]
@@ -97,7 +113,11 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"in 2025 and {_f(100 * vs['2026']['median_event_share'], 0)}% in 2026 (laps outside 107% of the best excluded).",
         f"5. **Physics accounting.** Giving the pole car's calibrated simulator Aston Martin's measured grip and top-speed gap accounts for "
         f"{_f(100 * (ds.get('ratio_of_means') or float('nan')), 0)}% of its mean 2026 gap [{_f(100 * (ds.get('ratio_ci90') or [float('nan')])[0], 0)}, "
-        f"{_f(100 * (ds.get('ratio_ci90') or [0, float('nan')])[1], 0)}%] over {ds.get('n_events')} events (event-level R² {_f(ds.get('r2_event_level'), 2)}). It is an accounting, not a forecast.",
+        f"{_f(100 * (ds.get('ratio_ci90') or [0, float('nan')])[1], 0)}%] over the {ds.get('n_events')} events where the geometry check passes and both teams have grip and top-speed measurements "
+        f"(event-level R² {_f(ds.get('r2_event_level'), 2)}). The same accounting for 2025, when the gap is a quarter as large, gives "
+        f"{_f(100 * (ds25.get('ratio_of_means') or float('nan')), 0)}% [{_f(100 * (ds25.get('ratio_ci90') or [float('nan')])[0], 0)}, "
+        f"{_f(100 * (ds25.get('ratio_ci90') or [0, float('nan')])[1], 0)}%] with event-level R² {_f(ds25.get('r2_event_level'), 1)} over {ds25.get('n_events')} events. "
+        "It is an accounting of a large deficit, not a forecast of small ones.",
     ]
     if up:
         gh = up["grip_high_rel"]
@@ -112,7 +132,8 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"acceleration fit by more than a few percent and the assumed one was best in {_f(100 * (wt.get('share_events_assumed_orientation_best') or 0), 0)}% of them (chance: 8%). "
         "Session-level wind readings are not informative enough, so dynamic pressure uses ground speed. Earlier wind claims are withdrawn.",
         f"8. **Data note.** Placing car data by GPS position needs a per-lap timing correction in this archive (median {_f(dq['gps_lag_s_median'], 2)} s, about 9 m at 300 km/h); "
-        "the archive's odometer distance is unaffected. Frozen car-data stretches (e.g. Baku 2026) and the feed's 104% throttle marker are detected and handled.",
+        "the archive's odometer distance is unaffected. Frozen car-data stretches (e.g. Baku 2026), car-data stalls (speed, throttle and brake held for 0.5–1.5 s "
+        "while GPS shows the car braking, then an impossible jump) and the feed's 104% throttle marker are detected and handled.",
         "",
         "## Data",
         "",
@@ -152,7 +173,9 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"gradient boosting R² {_f(mm['ml']['r2'], 2)}, hybrid R² {_f(mm['hybrid']['r2'], 2)} (RMSE {_f(mm['hybrid']['rmse_kmh'], 1)} km/h); within-corner R² ≈ 0 for all models. "
         f"Conformal coverage {_f(100 * cm['conformal_coverage'], 1)}% at a 90% target (median event {_f(100 * cm['coverage_by_event']['median'], 0)}%, worst {_f(100 * cm['coverage_by_event']['min'], 0)}%).",
         f"- Lap-sim accounting of the 2026 gap: {_f(100 * ds.get('ratio_of_means', float('nan')), 0)}% of the mean gap [{_f(100 * (ds.get('ratio_ci90') or [float('nan')])[0], 0)}, "
-        f"{_f(100 * (ds.get('ratio_ci90') or [0, float('nan')])[1], 0)}%], rank correlation with events r = {_f(ds.get('correlation'), 2)}, but event-level R² < 0: an accounting, not a forecast.",
+        f"{_f(100 * (ds.get('ratio_ci90') or [0, float('nan')])[1], 0)}%], correlation across its {ds.get('n_events')} events r = {_f(ds.get('correlation'), 2)} "
+        f"(Spearman {_f(ds.get('spearman'), 2)}), event-level R² {_f(ds.get('r2_event_level'), 2)}; in 2025, R² {_f(ds25.get('r2_event_level'), 1)}. "
+        "With five events this is an accounting, not a forecast.",
         "- Upgrade effects (difference-in-differences, 4 events either side):",
     ]
     for e in did:
@@ -180,3 +203,69 @@ def build_note(season_json: Path, out_md: Path) -> Path:
     out_md.parent.mkdir(parents=True, exist_ok=True)
     out_md.write_text("\n".join(lines), encoding="utf-8")
     return out_md
+
+
+def readme_blocks(s: dict[str, Any]) -> dict[str, str]:
+    """The README paragraphs that quote results, generated so they cannot drift from season.json."""
+    rates = s.get("section_rates", {})
+    a26, a25 = rates.get("2026", {}).get(TARGET, {}), rates.get("2025", {}).get(TARGET, {})
+    st26 = _sec(rates, "2026", TARGET, "straights")
+    vf = s.get("straight_vs_field", {}).get("2026", {})
+    nxt = vf.get("next_team", "n/a")
+    nxt_lap = rates.get("2026", {}).get(nxt, {}).get("lap_rate_pct")
+    off = _others(rates, "2026", off_pace=True)
+    ratios = [v["straight_to_corner_ratio"] for v in off.values()]
+    sp26 = s.get("straight_profile", {}).get("2026", {}).get(TARGET, {})
+    b0 = (sp26.get("bins") or [{}])[0]
+    vs = s["variance_split"]
+    findings = "\n".join([
+        "- **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent "
+        f"in each part of the lap, it loses {_f(st26.get('v'), 1)}% on the straights against at most {_f(vf.get('next_rate_pct'), 1)}% for any other team ({nxt}, "
+        f"{_f(nxt_lap, 2)}% off pole over a lap against Aston Martin's {_f(a26.get('lap_rate_pct'), 2)}%): {_f(vf.get('ratio'), 1)} times as much, 90% interval "
+        f"{_f((vf.get('ratio_ci90') or [None])[0], 1)} to {_f((vf.get('ratio_ci90') or [None, None])[1], 1)}. Every other team more than 1% off pole loses less per second "
+        f"on the straights than in the corners (ratios {_f(min(ratios), 2)} to {_f(max(ratios), 2)}, against {_f(a26.get('straight_to_corner_ratio'), 2)} for Aston Martin), "
+        f"as did Aston Martin in 2025 ({_f(a25.get('straight_to_corner_ratio'), 2)}).",
+        f"- **The straight-line loss builds late.** Along each main straight the car starts {_f(-(b0.get('gap_kmh') or 0), 1)} km/h down, holds that through the first half "
+        f"and loses {_f(-(sp26.get('second_half_kmh') or 0), 1)} km/h more in the second half (90% interval {_f(-(sp26.get('second_half_ci90') or [0, 0])[1], 1)} to "
+        f"{_f(-(sp26.get('second_half_ci90') or [0, 0])[0], 1)}), at full throttle, on {sp26.get('n_straights_losing_late')} of {sp26.get('n_straights')} straights at "
+        f"{sp26.get('n_events')} events. Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.",
+        f"- **The car decides the 2026 qualifying order:** in the median event, between-team differences explain {_f(100 * vs['2026']['median_event_share'], 0)}% of the "
+        f"variance in qualifying gaps, against {_f(100 * vs['2025']['median_event_share'], 0)}% in 2025.",
+        "- **What did not survive review is withdrawn, not hidden.** An early 36 kW power-deficit claim (an artefact of road gradient and unlike-for-like comparison), "
+        "a \"slow corners are the biggest loss\" claim (cars simply spend most time there) and two wind claims (wind data proved uninformative) are documented as "
+        "withdrawn in the technical note.",
+    ])
+    dq = s["data_quality"]
+    skipped = s.get("skipped_events", [])
+    gaps = [f"{e['event'].replace(' Grand Prix', '')} {e['season']}" for e in skipped if "passed checks" in e.get("reason", "")]
+    missing = [f"{e['event'].replace(' Grand Prix', '')} {e['season']}" for e in skipped if "unavailable" in e.get("reason", "")]
+    other = [e for e in skipped if "passed checks" not in e.get("reason", "") and "unavailable" not in e.get("reason", "")]
+    gates = (
+        "Every lap is checked against limits that real broken laps fail: GPS distance to the reference line, GPS position vs the timing line at both ends, "
+        "consistency of speed with the timing channel, GPS speed vs wheel speed, sample gaps, speed trap vs peak speed, frozen car data (speed and rpm stuck for over "
+        "100 m, as on both Aston Martins at Baku 2026) and car-data stalls (speed, throttle and brake held for 0.5–1.5 s while GPS shows the car braking, then a "
+        "jump no car can make). The feed's 104% \"invalid throttle\" marker is repaired rather than rejected. Every event's curvature must integrate to the "
+        f"circuit's own turn count (zero for the figure-of-eight at Suzuka). {dq['laps_passed']} of {dq['laps_total']} laps pass. Events that fail are listed with "
+        "reasons in the report"
+        + (f"; {len(gaps)} ({', '.join(gaps)}) have too few laps that pass, because of telemetry dropouts" if gaps else "")
+        + (f", and {len(missing)} ({', '.join(missing)}) have source files missing from the archive" if missing else "")
+        + (f"; {len(other)} more fail for other reasons" if other else "")
+        + "."
+    )
+    return {"findings": findings, "gates": gates}
+
+
+def update_readme(season_json: Path, readme: Path) -> bool:
+    """Rewrite the generated blocks of the README in place; True if anything changed."""
+    s = json.loads(Path(season_json).read_text())
+    text = Path(readme).read_text(encoding="utf-8")
+    new = text
+    for name, body in readme_blocks(s).items():
+        start, end = f"<!-- {name}:start -->", f"<!-- {name}:end -->"
+        i, j = new.find(start), new.find(end)
+        if i < 0 or j < i:
+            raise ValueError(f"README is missing the {start} ... {end} markers")
+        new = new[: i + len(start)] + "\n" + body + "\n" + new[j:]
+    if new != text:
+        Path(readme).write_text(new, encoding="utf-8")
+    return new != text

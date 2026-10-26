@@ -11,10 +11,12 @@ interactive report.
 
 ## Main findings
 
-- **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent in each part of the lap, it loses about 3.8% on the straights against at most 1.7% for any other team (Cadillac, which is just as slow over a lap): 2.2 times as much, 90% interval 1.8 to 2.9. Every other team more than 1% off pole, and Aston Martin in 2025, loses much less per second on the straights than in the corners.
-- **The straight-line loss builds late.** Along each main straight the car starts about 6 km/h down and loses roughly 3 km/h more in the second half, at full throttle. Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.
-- **The car decides the 2026 qualifying order:** in the median event, between-team differences explain about 94% of the variance in qualifying gaps, against about 51% in 2025.
+<!-- findings:start -->
+- **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent in each part of the lap, it loses 3.8% on the straights against at most 1.7% for any other team (Cadillac, 4.05% off pole over a lap against Aston Martin's 4.01%): 2.2 times as much, 90% interval 1.8 to 2.9. Every other team more than 1% off pole loses less per second on the straights than in the corners (ratios 0.22 to 0.61, against 0.92 for Aston Martin), as did Aston Martin in 2025 (0.21).
+- **The straight-line loss builds late.** Along each main straight the car starts 5.7 km/h down, holds that through the first half and loses 3.0 km/h more in the second half (90% interval 1.5 to 4.5), at full throttle, on 5 of 6 straights at 5 events. Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.
+- **The car decides the 2026 qualifying order:** in the median event, between-team differences explain 94% of the variance in qualifying gaps, against 51% in 2025.
 - **What did not survive review is withdrawn, not hidden.** An early 36 kW power-deficit claim (an artefact of road gradient and unlike-for-like comparison), a "slow corners are the biggest loss" claim (cars simply spend most time there) and two wind claims (wind data proved uninformative) are documented as withdrawn in the technical note.
+<!-- findings:end -->
 
 Exact figures and 90% intervals are in the technical note, which is generated from
 `data/processed/season.json`, so the text cannot drift from the data.
@@ -69,7 +71,9 @@ make serve
 
 ## Data quality gates
 
-Every lap is checked against limits that real broken laps fail: GPS distance to the reference line, GPS position vs the timing line at both ends, consistency of speed with the timing channel, GPS speed vs wheel speed, sample gaps, speed trap vs peak speed, and frozen car data (speed and rpm stuck for over 100 m, as on both Aston Martins at Baku 2026). The feed's 104% "invalid throttle" marker is repaired rather than rejected. Every event's curvature must integrate to the circuit's own turn count (zero for the figure-of-eight at Suzuka). Events that fail are listed with reasons in the report; three 2026 events are excluded because their archived telemetry has dropouts of up to 350 m, and two more have source files missing.
+<!-- gates:start -->
+Every lap is checked against limits that real broken laps fail: GPS distance to the reference line, GPS position vs the timing line at both ends, consistency of speed with the timing channel, GPS speed vs wheel speed, sample gaps, speed trap vs peak speed, frozen car data (speed and rpm stuck for over 100 m, as on both Aston Martins at Baku 2026) and car-data stalls (speed, throttle and brake held for 0.5–1.5 s while GPS shows the car braking, then a jump no car can make). The feed's 104% "invalid throttle" marker is repaired rather than rejected. Every event's curvature must integrate to the circuit's own turn count (zero for the figure-of-eight at Suzuka). 717 of 758 laps pass. Events that fail are listed with reasons in the report; 3 (Chinese 2026, Italian 2026, Japanese 2026) have too few laps that pass, because of telemetry dropouts, and 2 (Bahrain 2026, Spanish 2026) have source files missing from the archive.
+<!-- gates:end -->
 
 ## Limits
 
