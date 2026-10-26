@@ -29,12 +29,12 @@ from amr_aerotwin.modeling.calibration import (
     metropolis_posterior,
     posterior_lap_times,
 )
-from amr_aerotwin.modeling.energy import lap_energy_summary, straight_energy_metrics
+from amr_aerotwin.modeling.energy import lap_energy_summary, straight_energy_metrics, straight_speed_profile
 from amr_aerotwin.modeling.lap_compare import compare_laps
 from amr_aerotwin.modeling.pod import PODReducedOrderModel
-from amr_aerotwin.modeling.powertrain import acceleration_samples, band_medians
+from amr_aerotwin.modeling.powertrain import event_power_drag_rows
 from amr_aerotwin.modeling.race_pace import fit_race_pace
-from amr_aerotwin.modeling.validation import check_lap, geometry_ok
+from amr_aerotwin.modeling.validation import check_lap, expected_turn_count, geometry_ok
 from amr_aerotwin.physics.dynamics import (
     HIGH_SPEED_CORNER,
     STRAIGHT,
@@ -66,11 +66,14 @@ class EventOutput:
     corner_rows: pd.DataFrame
     race_rows: pd.DataFrame
     accel_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
+    profile_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
     warnings: list[str] = field(default_factory=list)
 
 
 def _r(x: Any, nd: int = 3) -> Any:
-    """Round floats / arrays for compact JSON."""
+    """Round floats (and NaN/inf to None) recursively through arrays, lists and dicts."""
+    if isinstance(x, dict):
+        return {k: _r(v, nd) for k, v in x.items()}
     if isinstance(x, (np.ndarray, list, tuple)):
         return [_r(v, nd) for v in x]
     if isinstance(x, (float, np.floating)):
@@ -110,7 +113,8 @@ def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[
     laps = repo.session_laps(year, event, QUALI)
     amb = repo.session_ambient(year, event, QUALI)
     try:
-        colors = dict(repo.drivers(year, event, QUALI)[["driver", "color"]].itertuples(index=False))
+        drv = repo.drivers(year, event, QUALI)
+        colors = dict(drv[["driver", "color"]].itertuples(index=False)) if not drv.empty else {}
     except DataUnavailableError:
         colors = {}
     valid = laps[laps["time"].notna() & ~laps["del"]]
@@ -218,8 +222,8 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     laps, ref, session_laps, w = _load_quali_laps(repo, year, event)
     warns += w
 
-    checks = {d: check_lap(l) for d, l in laps.items()}
-    good = {d: l for d, l in laps.items() if checks[d].passed}
+    checks = {d: check_lap(lp) for d, lp in laps.items()}
+    good = {d: lp for d, lp in laps.items() if checks[d].passed}
     for d, c in checks.items():
         if not c.passed:
             warns.append(f"{d} failed data checks: {c.failures}")
@@ -227,32 +231,32 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         raise DataUnavailableError(f"Only {len(good)} laps passed checks for {year} {event}")
 
     lam, lam_scores = select_gps_smoothing(
-        [(l.gps_time_s, l.gps_x_m, l.gps_y_m, l.meta.lap_time_s, l.time_s, l.speed_ms) for l in good.values() if len(l.gps_time_s) > 50]
+        [(lp.gps_time_s, lp.gps_x_m, lp.gps_y_m, lp.meta.lap_time_s, lp.time_s, lp.speed_ms) for lp in good.values() if len(lp.gps_time_s) > 50]
     )
-    kappa = consensus_curvature([lap_curvature(l, lam) for l in good.values()])
+    kappa = consensus_curvature([lap_curvature(lp, lam) for lp in good.values()])
     tn = turning_number(kappa, ref.step_m)
-    geo_ok = geometry_ok(tn)
+    n_turns = expected_turn_count(ref.x_m, ref.y_m)
+    geo_ok = geometry_ok(tn, n_turns)
     if not geo_ok:
-        warns.append(f"geometry check failed (turning number {tn:.3f}); curvature-based fits flagged")
+        warns.append(f"geometry check failed (turning number {tn:.3f}, expected {n_turns}); curvature-based fits skipped")
 
-    states = {d: estimate_vehicle_state(l, curvature_inv_m=kappa) for d, l in good.items()}
+    states = {d: estimate_vehicle_state(lp, curvature_inv_m=kappa) for d, lp in good.items()}
     pole_drv = min(good, key=lambda d: good[d].meta.lap_time_s)
     pole = good[pole_drv]
     pole_state = states[pole_drv]
-    lap_times = {d: l.meta.lap_time_s for d, l in good.items()}
-    fastest = min(l.meta.lap_time_s for l in laps.values())
+    fastest = min(lp.meta.lap_time_s for lp in laps.values())
 
     # Corners on the reference line
     corners = repo.corners(year, event)
     c_s, _ = project_onto_reference(corners["x_m"].to_numpy(), corners["y_m"].to_numpy(), ref)
     order = np.argsort(c_s)
     c_s = c_s[order]
-    c_lab = [f"T{n}{l}" for n, l in zip(corners["number"].to_numpy()[order], corners["letter"].to_numpy()[order])]
+    c_lab = [f"T{n}{lp}" for n, lp in zip(corners["number"].to_numpy()[order], corners["letter"].to_numpy()[order])]
     info = repo.circuit_info(year, event)
 
     # ------------------------------------------------------------------ grip per team
-    team_of = {d: l.meta.team for d, l in good.items()}
-    color_of = {l.meta.team: l.meta.team_color for l in good.values()}
+    team_of = {d: lp.meta.team for d, lp in good.items()}
+    color_of = {lp.meta.team: lp.meta.team_color for lp in good.values()}
     pts = {}
     for d, st in states.items():
         p = corner_limit_points(st, c_s)
@@ -271,30 +275,27 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
 
     # ------------------------------------------------------------------ energy + acceleration bands
     energy = {d: lap_energy_summary(st) for d, st in states.items()}
-    acc = []
-    for team in sorted(set(team_of.values())):
-        samples = pd.concat([acceleration_samples(states[d]) for d in states if team_of[d] == team], ignore_index=True)
-        b = band_medians(samples, year)
-        b["season"], b["round"], b["event"], b["team"] = year, round_no, event, team
-        b["mass_kg"] = next(states[d].mass_kg for d in states if team_of[d] == team)
-        acc.append(b)
-    accel_rows = pd.concat(acc, ignore_index=True) if acc else pd.DataFrame()
+    accel_rows = event_power_drag_rows(states, pole_state)
+    accel_rows["season"], accel_rows["round"], accel_rows["event"] = year, round_no, event
+    profile_rows = straight_speed_profile(list(states.values()), pole_state)
+    if not profile_rows.empty:
+        profile_rows["season"], profile_rows["round"], profile_rows["event"] = year, round_no, event
 
     # ------------------------------------------------------------------ driver + team tables
     drows = []
-    for d, l in laps.items():
+    for d, lp in laps.items():
         e = energy.get(d, {})
         drows.append({
-            "season": year, "round": round_no, "event": event, "driver": d, "team": l.meta.team,
-            "color": l.meta.team_color, "lap_number": l.meta.lap_number, "lap_time_s": l.meta.lap_time_s,
-            "gap_pct": (l.meta.lap_time_s / fastest - 1) * 100, "compound": l.meta.compound,
-            "tyre_life": l.meta.tyre_life_laps, "passed_checks": checks[d].passed,
+            "season": year, "round": round_no, "event": event, "driver": d, "team": lp.meta.team,
+            "color": lp.meta.team_color, "lap_number": lp.meta.lap_number, "lap_time_s": lp.meta.lap_time_s,
+            "gap_pct": (lp.meta.lap_time_s / fastest - 1) * 100, "compound": lp.meta.compound,
+            "tyre_life": lp.meta.tyre_life_laps, "passed_checks": checks[d].passed,
             "straight_speed_delta_kmh": straight_delta.get(d, np.nan),
             "clip_speed_drop_kmh": e.get("speed_drop_kmh", np.nan),
             "clip_decel_distance_m": e.get("decel_distance_m", np.nan),
             "clip_power_deficit_kw": e.get("power_deficit_kw", np.nan),
             "clip_time_loss_s": e.get("time_loss_s", np.nan),
-            **{f"q_{k}": v for k, v in l.quality.items()},
+            **{f"q_{k}": v for k, v in lp.quality.items()},
         })
     driver_rows = pd.DataFrame(drows)
 
@@ -336,9 +337,9 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         dd = (pole.distance_m - cs + length / 2) % length - length / 2
         pole_min[i] = float(np.min(pole_state.speed_smooth_ms[np.abs(dd) <= 60]) * 3.6)
     for d, st in states.items():
-        l = st.lap
+        lp = st.lap
         for i, cs in enumerate(c_s):
-            dd = (l.distance_m - cs + length / 2) % length - length / 2
+            dd = (lp.distance_m - cs + length / 2) % length - length / 2
             win = np.abs(dd) <= 60
             near = np.abs(dd) <= 30
             if win.sum() < 5:
@@ -347,12 +348,12 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             crows.append({
                 "season": year, "round": round_no, "event": event, "event_key": f"{year}-{event}",
                 "circuit_corner": f"{info.get('circuit_name')}-{c_lab[i]}", "corner_key": c_lab[i],
-                "driver": d, "team": l.meta.team, "v_min_kmh": float(st.speed_smooth_ms[idx] * 3.6),
+                "driver": d, "team": lp.meta.team, "v_min_kmh": float(st.speed_smooth_ms[idx] * 3.6),
                 "radius_m": float(1.0 / max(np.max(np.abs(kappa[near])), 1e-4)),
                 "turn_angle_deg": float(np.degrees(abs(np.sum(kappa[win]) * ref.step_m))),
                 "approach_m": float(approach[i]), "rho_kg_m3": st.rho_kg_m3,
-                "headwind_ms": float(st.v_headwind_ms[idx]), "track_temp_c": l.ambient.track_temp_c,
-                "tyre_life": l.meta.tyre_life_laps, "season_2026": float(year >= 2026),
+                "headwind_ms": float(st.v_headwind_ms[idx]), "track_temp_c": lp.ambient.track_temp_c,
+                "tyre_life": lp.meta.tyre_life_laps, "season_2026": float(year >= 2026),
                 "speed_class": corner_speed_class(pole_min[i]), "geometry_ok": geo_ok,
             })
     corner_rows = pd.DataFrame(crows)
@@ -363,7 +364,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         "date": str(session_laps["lSD"].dropna().min())[:10] if "lSD" in session_laps else None,
         "circuit": info, "lap_length_m": _r(length, 1), "gps_smoothing_lam": lam,
         "gps_smoothing_scores": {str(k): _r(v, 3) for k, v in lam_scores.items()},
-        "turning_number": _r(tn, 4), "geometry_ok": geo_ok, "distance_scale": _r(ref.scale, 4),
+        "turning_number": _r(tn, 4), "expected_turns": n_turns, "geometry_ok": geo_ok, "distance_scale": _r(ref.scale, 4),
         "pole": {"driver": pole_drv, "team": pole.meta.team, "lap_time_s": pole.meta.lap_time_s},
         "track": {"high_speed_share": _r(high_share), "full_throttle_share": _r(full_throttle),
                   "straight_share": _r(straight_share), "q_low_pa": _r(q_low, 0), "q_high_pa": _r(q_high, 0),
@@ -376,7 +377,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         "grip_points": _r(lim[["team", "driver", "q_pa", "a_comb_ms2", "speed_kmh"]].to_dict("list"), 2) if len(lim) else {},
     }
 
-    amr = {d: l for d, l in good.items() if l.meta.team == TARGET_TEAM}
+    amr = {d: lp for d, lp in good.items() if lp.meta.team == TARGET_TEAM}
     amr_best = min(amr, key=lambda d: amr[d].meta.lap_time_s) if amr else None
     if amr_best:
         cmp_ = compare_laps(good[amr_best], pole, c_s, c_lab)
@@ -475,7 +476,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         d: {"passed": c.passed, "failures": _r(c.failures, 2),
             "metrics": _r({k: laps[d].quality[k] for k in laps[d].quality}, 3)} for d, c in checks.items()
     }
-    return EventOutput(summary, driver_rows, team_rows, corner_rows, race_rows, accel_rows, warns)
+    return EventOutput(summary, driver_rows, team_rows, corner_rows, race_rows, accel_rows, profile_rows, warns)
 
 
 def safe_process_event(repo: TelemetryRepository, year: int, event: str, round_no: int, run_mcmc: bool = True) -> EventOutput | str:

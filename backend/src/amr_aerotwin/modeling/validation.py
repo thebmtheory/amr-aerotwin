@@ -46,9 +46,19 @@ def check_lap(lap: AlignedLap) -> LapCheckResult:
     return LapCheckResult(passed=not fails, failures=fails)
 
 
-def geometry_ok(turning_number: float) -> bool:
-    """A closed lap's curvature must integrate to +-1 turn; GPS dropouts break this."""
-    return abs(abs(turning_number) - 1.0) <= TURNING_NUMBER_TOLERANCE
+def geometry_ok(turning_number: float, expected_turns: int = 1) -> bool:
+    """Integrated curvature must match the circuit's turn count (GPS dropouts break this).
+
+    Most circuits make one full turn; a figure-of-eight such as Suzuka makes zero. The
+    expected count comes from the reference path's own heading (`expected_turn_count`).
+    """
+    return abs(abs(turning_number) - abs(expected_turns)) <= TURNING_NUMBER_TOLERANCE
+
+
+def expected_turn_count(x_m: np.ndarray, y_m: np.ndarray) -> int:
+    """Net number of turns of a closed path, from its unwrapped heading (rounded)."""
+    heading = np.unwrap(np.arctan2(np.diff(np.append(y_m, y_m[0])), np.diff(np.append(x_m, x_m[0]))))
+    return int(np.rint((heading[-1] - heading[0]) / (2 * np.pi)))
 
 
 @dataclass(frozen=True)

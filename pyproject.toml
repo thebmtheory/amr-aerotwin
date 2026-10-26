@@ -27,7 +27,7 @@ aerotwin = "amr_aerotwin.cli:main"
 where = ["backend/src"]
 
 [tool.setuptools.package-data]
-amr_aerotwin = ["report/templates/*", "report/static/*"]
+amr_aerotwin = ["report/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
@@ -41,3 +41,7 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "NPY"]
 ignore = ["E501", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+# Per-event helper closures in the season analyses are only called inside their own loop iteration
+"backend/src/amr_aerotwin/pipeline/season.py" = ["B023"]

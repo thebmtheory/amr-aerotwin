@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-
 from amr_aerotwin.domain import AmbientState
 from amr_aerotwin.physics.kinematics import (
     compute_air_density_kg_m3,

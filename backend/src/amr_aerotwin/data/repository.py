@@ -18,9 +18,9 @@ import numpy as np
 import pandas as pd
 import requests
 
-from amr_aerotwin.domain import AmbientState
+from amr_aerotwin.domain import DATA_DIR, AmbientState
 
-DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[4] / "data" / "telemetry_cache"
+DEFAULT_CACHE_DIR = DATA_DIR / "telemetry_cache"
 RAW_BASE_URL = "https://raw.githubusercontent.com/TracingInsights"
 API_BASE_URL = "https://api.github.com/repos/TracingInsights"
 
@@ -34,6 +34,12 @@ LAP_NUMERIC_COLUMNS = [
 
 class DataUnavailableError(RuntimeError):
     """Raised when a file is neither cached nor downloadable (offline mode or HTTP 404)."""
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def _clean_value(v: Any) -> Any:
@@ -59,7 +65,8 @@ class TelemetryRepository:
     def __init__(self, cache_dir: Path = DEFAULT_CACHE_DIR, offline: bool | None = None) -> None:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.offline = bool(os.environ.get("AEROTWIN_OFFLINE")) if offline is None else offline
+        env = os.environ.get("AEROTWIN_OFFLINE", "").strip().lower()
+        self.offline = env in ("1", "true", "yes", "on") if offline is None else offline
 
     # ------------------------------------------------------------------ transport
     def _cache_path(self, year: int, rel_path: str) -> Path:
@@ -91,23 +98,33 @@ class TelemetryRepository:
         if self.offline:
             raise DataUnavailableError(f"Not cached (offline): {year}/{rel_path}")
         data = self._download(f"{RAW_BASE_URL}/{year}/main/{quote(rel_path)}")
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.replace(path)
+        _atomic_write(path, json.dumps(data))
         return data
 
+    def invalidate_event(self, year: int, event: str) -> int:
+        """Delete cached files of one event (used to re-fetch a weekend still in progress)."""
+        prefix = f"{year}_" + event.replace(" ", "_") + "__"
+        removed = 0
+        for f in self.cache_dir.glob(prefix + "*"):
+            f.unlink()
+            removed += 1
+        return removed
+
     # ------------------------------------------------------------------ catalogue
-    def list_events(self, year: int) -> list[str]:
-        """Grand Prix folders available for `year` (testing sessions excluded)."""
+    def list_events(self, year: int, refresh: bool = False) -> list[str]:
+        """Grand Prix folders available for `year` (testing sessions excluded).
+
+        The listing is cached; pass `refresh=True` (as `fetch` does) to pick up new rounds.
+        """
         path = self.cache_dir / f"{year}__events.json"
-        if path.exists():
+        if path.exists() and not (refresh and not self.offline):
             names = json.loads(path.read_text(encoding="utf-8"))
         else:
             if self.offline:
                 raise DataUnavailableError(f"Event list for {year} not cached (offline)")
             listing = self._download(f"{API_BASE_URL}/{year}/contents")
             names = [d["name"] for d in listing if d.get("type") == "dir"]
-            path.write_text(json.dumps(names), encoding="utf-8")
+            _atomic_write(path, json.dumps(names))
         return [n for n in names if n.endswith("Grand Prix") and n not in NON_EVENT_DIRS]
 
     # ------------------------------------------------------------------ tables

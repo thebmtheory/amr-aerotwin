@@ -3,7 +3,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-
 from amr_aerotwin.modeling.corner_model import (
     NUMERIC_FEATURES,
     cross_validate,
@@ -60,7 +59,7 @@ def test_changepoint_finds_a_step_and_stays_quiet_without_one():
     rng = np.random.default_rng(2)
     y = np.concatenate([np.full(10, 1.5), np.full(10, 0.9)]) + rng.normal(0, 0.12, 20)
     cp = bayesian_changepoint(y)
-    assert cp.map_index == 10 and cp.p_no_change < 0.05
+    assert cp.map_index == 10 and cp.p_no_change < 0.05 and cp.map_probability > 0.5
     assert cp.effect_ci90_pct[0] < -0.6 + 0.2 and cp.effect_ci90_pct[1] < 0
     flat = bayesian_changepoint(1.2 + rng.normal(0, 0.12, 20))
     assert flat.p_no_change > 0.5
@@ -83,15 +82,17 @@ def _panel(effect=-0.5, seed=3, noise=0.1):
 def test_upgrade_did_recovers_effect_with_significant_placebo_test():
     eff = upgrade_effects(_panel(-0.5, noise=0.04), pd.DataFrame({"season": [2025], "event": ["E11"]}), "Aston Martin")[0]
     assert eff.effect_pct == pytest.approx(-0.5, abs=0.08)
-    assert eff.team_placebo_p == 0.0 and eff.time_placebo_p <= 0.15
+    # Smallest attainable permutation p with 7 rival placebos is 1/8
+    assert eff.team_placebo_p == pytest.approx(1 / 8) and eff.time_placebo_p <= 0.2
+    assert eff.n_pre == 4 and eff.n_post == 4 and eff.mde_pct > 0
 
 
 def test_upgrade_placebo_p_values_are_calibrated_under_the_null():
     up = pd.DataFrame({"season": [2025], "event": ["E11"]})
     p = [upgrade_effects(_panel(0.0, seed=s), up, "Aston Martin")[0].team_placebo_p for s in range(30)]
-    # With 7 placebo teams p is a multiple of 1/7; under H0 about 1/8 of runs give p = 0
-    assert np.mean(np.array(p) == 0.0) < 0.3
-    assert np.mean(p) > 0.3
+    # Under H0 the permutation p-value is uniform on {1/8, ..., 8/8}: P(p <= 1/8) = 1/8
+    assert np.mean(np.array(p) <= 1 / 8 + 1e-9) < 0.3
+    assert np.mean(p) > 0.35
 
 
 def _corner_data(n_events=12, seed=4):
@@ -169,8 +170,9 @@ def test_grip_matched_params_hit_both_reference_points():
     def grip(p, q):
         return p.mu * (G + q * p.cla_m2 / p.mass_kg)
 
-    new = grip_matched_params(base, 0.97, 0.90, 800.0, 3500.0)
+    new, clamped = grip_matched_params(base, 0.97, 0.90, 800.0, 3500.0)
+    assert not clamped
     assert grip(new, 800.0) / grip(base, 800.0) == pytest.approx(0.97, rel=1e-9)
     assert grip(new, 3500.0) / grip(base, 3500.0) == pytest.approx(0.90, rel=1e-9)
-    same = grip_matched_params(base, 1.0, 1.0, 800.0, 3500.0)
+    same, _ = grip_matched_params(base, 1.0, 1.0, 800.0, 3500.0)
     assert same.mu == pytest.approx(base.mu) and same.cla_m2 == pytest.approx(base.cla_m2)

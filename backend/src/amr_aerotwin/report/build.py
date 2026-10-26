@@ -7,12 +7,14 @@ detail file is loaded only when that event is selected.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
 from typing import Any
 
 STATIC = Path(__file__).parent / "static"
+MARKER = ".aerotwin-site"  # written into every built site; only such folders are ever replaced
 
 # Keys from the per-event summary that the site actually uses (keeps files small)
 EVENT_KEYS = [
@@ -44,18 +46,26 @@ def build_site(processed_dir: Path, site_dir: Path) -> Path:
     events = {p.stem: json.loads(p.read_text()) for p in sorted((processed_dir / "events").glob("*.json"))}
 
     if site_dir.exists():
+        if not (site_dir / MARKER).exists() and any(site_dir.iterdir()):
+            raise FileExistsError(f"{site_dir} exists and was not built by aerotwin; refusing to overwrite it")
         shutil.rmtree(site_dir)
     (site_dir / "data" / "events").mkdir(parents=True)
+    (site_dir / MARKER).write_text("built by aerotwin report\n", encoding="utf-8")
     for f in STATIC.iterdir():
         if f.is_file():
             shutil.copy(f, site_dir / f.name)
     # page.html is the body fragment (used as-is by hosts that add their own document
     # skeleton); index.html wraps it for GitHub Pages and local viewing.
     fragment = (STATIC / "page.html").read_text(encoding="utf-8")
+    # Content-hash query strings so browsers never run a stale script after a rebuild
+    for asset in ("app.js", "app.css", "lapsim.js"):
+        h = hashlib.sha1((STATIC / asset).read_bytes()).hexdigest()[:8]
+        fragment = fragment.replace(f'"{asset}"', f'"{asset}?v={h}"')
+    head, body = fragment.split("<header", 1)  # title/meta/link lines go in <head>
     (site_dir / "index.html").write_text(
         '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
-        "</head>\n<body>\n" + fragment + "\n</body>\n</html>\n",
+        + head + "</head>\n<body>\n<header" + body + "\n</body>\n</html>\n",
         encoding="utf-8",
     )
 

@@ -32,8 +32,10 @@ def main(argv: list[str] | None = None) -> None:
         analyse(args.out)
     if args.command in ("report", "all"):
         from amr_aerotwin.report.build import build_site
+        from amr_aerotwin.report.note import build_note
 
         build_site(args.out, args.site)
+        build_note(args.out / "season.json", args.site.parent / "docs" / "technical_note.md")
     logging.info("done in %.0f s", time.time() - t0)
 
 

@@ -10,9 +10,11 @@ power is falling with *time*: the battery has stopped deploying, or the car is h
 at full throttle. Active-aero and ERS state are not published (FIA data policy, 2026), so
 this indirect signature is the only public view of energy management.
 
-Metrics per straight (model-light):
+Metrics per straight (model-light). Acceleration has gravity removed using the road
+gradient, so an uphill straight does not read as clipping, and a deceleration only counts
+when it persists for at least 30 m (single-sample noise is ~2 m/s^2).
 - speed_drop_kmh      peak speed minus speed at the end of the straight
-- decel_distance_m    metres of full-throttle deceleration (a_x < -0.3 m/s^2)
+- decel_distance_m    metres of persistent full-throttle deceleration after the peak
 - power_deficit_kw    m * |a_x| * v averaged over the decelerating part: the minimum power
                       shortfall relative to holding speed (drag change ignored, so a
                       lower bound)
@@ -29,18 +31,37 @@ from amr_aerotwin.physics.dynamics import VehicleState
 from amr_aerotwin.physics.vehicle_params import straight_segments
 
 DECEL_THRESHOLD_MS2 = -0.3
+MIN_PERSIST_M = 30.0
 
 
-def straight_energy_metrics(state: VehicleState, min_length_m: float = 300.0) -> pd.DataFrame:
+def _persistent(flag: np.ndarray, n_min: int) -> np.ndarray:
+    """Keep only runs of True at least n_min long."""
+    out = np.zeros_like(flag)
+    i = 0
+    while i < len(flag):
+        if flag[i]:
+            j = i
+            while j < len(flag) and flag[j]:
+                j += 1
+            if j - i >= n_min:
+                out[i:j] = True
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def straight_energy_metrics(state: VehicleState, min_length_m: float = 150.0) -> pd.DataFrame:
     """Per-straight clipping metrics for one lap."""
     rows = []
     step = state.lap.grid_step_m
+    n_min = max(1, int(round(MIN_PERSIST_M / step)))
     for seg in straight_segments(state, min_length_m=min_length_m, trim_m=10.0):
         v = state.speed_smooth_ms[seg]
-        ax = state.ax_ms2[seg]
+        ax = state.ax_propulsive_ms2[seg]
         i_peak = int(np.argmax(v))
         after = slice(i_peak, len(seg))
-        decel = ax[after] < DECEL_THRESHOLD_MS2
+        decel = _persistent(ax[after] < DECEL_THRESHOLD_MS2, n_min)
         v_after = v[after]
         deficit = state.mass_kg * np.abs(ax[after][decel]) * v_after[decel] / 1000.0
         rows.append(
@@ -51,7 +72,7 @@ def straight_energy_metrics(state: VehicleState, min_length_m: float = 300.0) ->
                 "end_speed_kmh": float(v[-1] * 3.6),
                 "speed_drop_kmh": float((v[i_peak] - v[-1]) * 3.6),
                 "peak_position_frac": float(i_peak / max(len(seg) - 1, 1)),
-                "decel_distance_m": float(np.sum(ax < DECEL_THRESHOLD_MS2) * step),
+                "decel_distance_m": float(np.sum(decel) * step),
                 "power_deficit_kw": float(np.mean(deficit)) if len(deficit) else 0.0,
                 "time_loss_s": float(np.sum(step * (1.0 / v_after - 1.0 / v[i_peak]))),
             }
@@ -72,3 +93,109 @@ def lap_energy_summary(state: VehicleState) -> dict[str, float]:
         "power_deficit_kw": float(np.average(df["power_deficit_kw"], weights=df["decel_distance_m"] + 1e-9)),
         "time_loss_s": float(df["time_loss_s"].sum()),
     }
+
+
+PROFILE_BINS = 10
+
+
+def straight_speed_profile(states: list[VehicleState], ref: VehicleState, min_length_m: float = 400.0) -> pd.DataFrame:
+    """Speed of every team along each main straight, at matched fractions of its length.
+
+    Straights are taken from the reference (pole) lap: full throttle from corner exit to the
+    braking point. Each straight is split into PROFILE_BINS equal parts by position, so all
+    cars are compared at the same piece of track (gradient and wind are shared). Returns one
+    row per (team, straight, bin) with the team's mean speed there (km/h).
+    """
+    rows = []
+    for k, seg in enumerate(straight_segments(ref, min_length_m=min_length_m, trim_m=0.0)):
+        edges = np.linspace(0, len(seg), PROFILE_BINS + 1).astype(int)
+        step = ref.lap.grid_step_m
+        for st in states:
+            v = st.speed_smooth_ms[seg] * 3.6
+            for b in range(PROFILE_BINS):
+                rows.append({"team": st.lap.meta.team, "driver": st.lap.meta.driver, "straight": k,
+                             "straight_start_m": float(ref.distance_m[seg[0]]), "bin": b,
+                             "bin_length_m": float((edges[b + 1] - edges[b]) * step),
+                             "speed_kmh": float(np.mean(v[edges[b]:edges[b + 1]]))})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return df.groupby(["team", "straight", "straight_start_m", "bin", "bin_length_m"], as_index=False)["speed_kmh"].mean()
+
+
+def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, seed: int = 0) -> pd.DataFrame:
+    """Team speed minus the median of the *other* teams, per fraction of straight length.
+
+    `profiles`: rows from `straight_speed_profile` plus `round`. Each event contributes its
+    mean over straights; the bootstrap resamples events.
+    """
+    p = profiles.copy()
+    rows = []
+    for (rnd, k, b), g in p.groupby(["round", "straight", "bin"]):
+        t, o = g[g["team"] == team], g[g["team"] != team]
+        if t.empty or len(o) < 4:
+            continue
+        rows.append({"round": rnd, "straight": k, "bin": b, "gap_kmh": float(t["speed_kmh"].iloc[0] - o["speed_kmh"].median()),
+                     "field_kmh": float(o["speed_kmh"].median()),
+                     "bin_length_m": float(g["bin_length_m"].iloc[0]) if "bin_length_m" in g else np.nan})
+    d = pd.DataFrame(rows)
+    if d.empty:
+        return d
+    per_event = d.groupby(["round", "bin"])["gap_kmh"].mean().unstack("bin")
+    field_v = d.groupby(["round", "bin"])["field_kmh"].mean().unstack("bin").to_numpy()
+    rng = np.random.default_rng(seed)
+    arr = per_event.to_numpy()
+    idx = rng.integers(0, len(arr), size=(n_boot, len(arr)))
+    boots = np.nanmean(arr[idx], axis=1)
+    growth = boots[:, -1] - boots[:, 0]
+    half = PROFILE_BINS // 2
+    first = boots[:, half - 1] - boots[:, 0]
+    second = boots[:, -1] - boots[:, half]
+    # A pure drag excess changes dv/ds in proportion to v, so the second half (faster) should
+    # lose more than the first in the ratio of mean speeds; much more points to something else.
+    v_first = np.nanmean(field_v[:, :half])
+    v_second = np.nanmean(field_v[:, half:])
+    out = pd.DataFrame({
+        "bin": per_event.columns.astype(int),
+        "fraction": (per_event.columns.astype(float) + 0.5) / PROFILE_BINS,
+        "gap_kmh": np.nanmean(arr, axis=0),
+        "ci_lo": np.nanpercentile(boots, 5, axis=0),
+        "ci_hi": np.nanpercentile(boots, 95, axis=0),
+    })
+    out.attrs["growth_kmh"] = float(np.nanmean(arr[:, -1] - arr[:, 0]))
+    out.attrs["growth_ci90"] = (float(np.nanpercentile(growth, 5)), float(np.nanpercentile(growth, 95)))
+    out.attrs["first_half_kmh"] = float(np.nanmean(arr[:, half - 1] - arr[:, 0]))
+    out.attrs["first_half_ci90"] = (float(np.nanpercentile(first, 5)), float(np.nanpercentile(first, 95)))
+    out.attrs["second_half_kmh"] = float(np.nanmean(arr[:, -1] - arr[:, half]))
+    out.attrs["second_half_ci90"] = (float(np.nanpercentile(second, 5)), float(np.nanpercentile(second, 95)))
+    out.attrs["drag_only_ratio"] = float(v_second / v_first) if v_first > 0 else float("nan")
+    out.attrs["n_events"] = int(len(arr))
+    if d["bin_length_m"].notna().all():
+        # Time cost per lap (all main straights) of the whole straight-line gap, and of the part
+        # that builds up along the straight (gap beyond the corner-exit gap of that straight)
+        v_f = d["field_kmh"] / 3.6
+        exit_gap = d.groupby(["round", "straight"])["gap_kmh"].transform(lambda x: x.iloc[0])
+        d["t_total"] = d["bin_length_m"] * (1 / np.maximum(v_f + d["gap_kmh"] / 3.6, 1) - 1 / v_f)
+        d["t_build"] = d["bin_length_m"] * (1 / np.maximum(v_f + d["gap_kmh"] / 3.6, 1) - 1 / np.maximum(v_f + exit_gap / 3.6, 1))
+        per_ev_t = d.groupby("round")[["t_total", "t_build"]].sum().to_numpy()
+        tb = per_ev_t[rng.integers(0, len(per_ev_t), size=(n_boot, len(per_ev_t)))].mean(axis=1)
+        out.attrs["time_total_s"] = float(per_ev_t[:, 0].mean())
+        out.attrs["time_total_ci90"] = (float(np.percentile(tb[:, 0], 5)), float(np.percentile(tb[:, 0], 95)))
+        out.attrs["time_build_s"] = float(per_ev_t[:, 1].mean())
+        out.attrs["time_build_ci90"] = (float(np.percentile(tb[:, 1], 5)), float(np.percentile(tb[:, 1], 95)))
+    return out
+
+
+def relative_metric(teams: pd.DataFrame, team: str, col: str, n_boot: int = 2000, seed: int = 0) -> dict[str, float]:
+    """Mean over events of (team value - median of other teams), with an event bootstrap CI."""
+    vals = []
+    for _, g in teams.groupby("round"):
+        t, o = g[g["team"] == team][col].dropna(), g[g["team"] != team][col].dropna()
+        if len(t) and len(o) >= 4:
+            vals.append(float(t.iloc[0] - o.median()))
+    v = np.array(vals)
+    if len(v) < 3:
+        return {"mean": float("nan"), "lo": float("nan"), "hi": float("nan"), "n": int(len(v))}
+    rng = np.random.default_rng(seed)
+    boots = v[rng.integers(0, len(v), size=(n_boot, len(v)))].mean(axis=1)
+    return {"mean": float(v.mean()), "lo": float(np.percentile(boots, 5)), "hi": float(np.percentile(boots, 95)), "n": int(len(v))}

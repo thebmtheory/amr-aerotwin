@@ -6,28 +6,32 @@ corner geometry (from the multi-driver consensus path), air density, the headwin
 component at the corner, track temperature, tyre age and season. The target never enters
 a feature, which is what the original prototype got wrong.
 
-Models, all evaluated with GroupKFold over *events* (a whole Grand Prix is held out, so
-nothing about that track leaks into training):
+Models, all evaluated with GroupKFold over *circuits* (every event at a circuit, in both
+seasons, is held out together, so the model never sees the test track):
   steady    v^2 = a R / (1 - b rho R): the steady-state cornering limit with aero grip,
             with (a, b) fitted on the training folds only
   physics   the lap simulator run on the event's geometry with a nominal car whose
-            parameters are the median of the *other* events' calibrations (column
-            `v_sim_kmh`; falls back to `steady` where no simulation exists). Unlike the
+            parameters are the median of the *training-fold* events' calibrations
+            (`sim_fn`; falls back to `steady` where no simulation exists). Unlike the
             steady-state limit it knows that fast corners are reached at power-limited speed.
   ml        gradient-boosted trees on the raw features
   hybrid    gradient-boosted trees on the residual of `physics`
 
 Prediction intervals use split conformal calibration across folds: the interval width for
-events in fold k comes only from residuals on the *other* folds, so the reported coverage
-is an honest out-of-sample number.
+fold k comes only from residuals on the *other* folds. Coverage is marginal: it is reported
+per event as well, because it varies a lot between tracks.
+
+Almost all of the target's variance is between corners (a hairpin vs a flat-out kink), so
+R^2 mostly measures geometry. The `within_corner_r2` metric asks the harder question:
+how well the model explains differences between cars at the *same* corner.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import combinations
 from math import factorial
-from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -81,25 +85,44 @@ class CornerModelReport:
     conformal_coverage: float
     conformal_halfwidth_kmh: float
     coverage_by_class: dict[str, float]
+    coverage_by_event: dict[str, float]
     physics_params: tuple[float, float]  # fitted on all data, for reporting
     feature_names: list[str]
 
 
-def cross_validate(df: pd.DataFrame, n_splits: int = 5, alpha: float = 0.10, use_team: bool = False) -> CornerModelReport:
-    """Grouped (by event) cross-validation of physics, ML and hybrid models + conformal check."""
+def cross_validate(
+    df: pd.DataFrame,
+    n_splits: int = 5,
+    alpha: float = 0.10,
+    use_team: bool = False,
+    group_col: str = "circuit",
+    sim_fn: Callable[[set[str]], pd.DataFrame] | None = None,
+) -> CornerModelReport:
+    """Grouped (by circuit) cross-validation of steady, physics, ML and hybrid models.
+
+    `sim_fn(train_event_keys)` returns columns (event_key, corner_key, v_sim_kmh) computed with
+    a nominal car from the training events only, so no calibration from a test event
+    reaches the physics baseline.
+    """
     df = df.reset_index(drop=True).copy()
-    groups = df["event_key"].to_numpy()
+    groups = df[group_col if group_col in df else "event_key"].to_numpy()
     teams = sorted(df["team"].unique())
     y = df["v_min_kmh"].to_numpy()
     oof = {m: np.full(len(df), np.nan) for m in ("steady", "physics", "ml", "hybrid")}
-    has_sim = df["v_sim_kmh"].notna().to_numpy() if "v_sim_kmh" in df else np.zeros(len(df), dtype=bool)
     fold_id = np.full(len(df), -1)
     gkf = GroupKFold(n_splits=min(n_splits, len(np.unique(groups))))
     for k, (tr, te) in enumerate(gkf.split(df, y, groups)):
         fold_id[te] = k
         a, b = fit_physics(df.iloc[tr])
         steady = physics_speed_kmh(df["radius_m"].to_numpy(), df["rho_kg_m3"].to_numpy(), a, b)
-        phys = np.where(has_sim, df["v_sim_kmh"].to_numpy() if "v_sim_kmh" in df else steady, steady)
+        if sim_fn is not None:
+            sims = sim_fn(set(df["event_key"].iloc[tr]))
+            v_sim = df[["event_key", "corner_key"]].merge(sims, on=["event_key", "corner_key"], how="left")["v_sim_kmh"].to_numpy()
+        elif "v_sim_kmh" in df:
+            v_sim = df["v_sim_kmh"].to_numpy()
+        else:
+            v_sim = np.full(len(df), np.nan)
+        phys = np.where(np.isfinite(v_sim), v_sim, steady)
         phys_tr, phys_te = phys[tr], phys[te]
         x = _matrix(df, use_team, teams)
         oof["steady"][te] = steady[te]
@@ -108,13 +131,17 @@ def cross_validate(df: pd.DataFrame, n_splits: int = 5, alpha: float = 0.10, use
         oof["hybrid"][te] = phys_te + _gbm().fit(x[tr], y[tr] - phys_tr).predict(x[te])
 
     rows = []
+    cell = df["event_key"].astype(str) + "|" + df["corner_key"].astype(str)
+    y_within = y - df.groupby(cell)["v_min_kmh"].transform("mean").to_numpy()
     for m, pred in oof.items():
         err = y - pred
+        p_within = pred - pd.Series(pred).groupby(cell.to_numpy()).transform("mean").to_numpy()
         rows.append({
             "model": m,
             "rmse_kmh": float(np.sqrt(np.mean(err**2))),
             "mae_kmh": float(np.mean(np.abs(err))),
             "r2": float(1 - np.sum(err**2) / np.sum((y - y.mean()) ** 2)),
+            "within_corner_r2": float(1 - np.sum((y_within - p_within) ** 2) / np.sum(y_within**2)),
         })
 
     # Split-conformal across folds: interval width for fold k from the other folds only
@@ -131,6 +158,7 @@ def cross_validate(df: pd.DataFrame, n_splits: int = 5, alpha: float = 0.10, use
     out = df.assign(pred_steady=oof["steady"], pred_physics=oof["physics"], pred_ml=oof["ml"], pred_hybrid=oof["hybrid"],
                     conformal_halfwidth=widths, covered=covered, fold=fold_id)
     by_class = out.groupby("speed_class")["covered"].mean().to_dict()
+    per_event = out.groupby("event_key")["covered"].mean()
     names = NUMERIC_FEATURES + ([f"team:{t}" for t in teams] if use_team else [])
     return CornerModelReport(
         metrics=pd.DataFrame(rows),
@@ -138,6 +166,7 @@ def cross_validate(df: pd.DataFrame, n_splits: int = 5, alpha: float = 0.10, use
         conformal_coverage=float(covered.mean()),
         conformal_halfwidth_kmh=float(widths.mean()),
         coverage_by_class={str(k): float(v) for k, v in by_class.items()},
+        coverage_by_event={str(k): float(v) for k, v in per_event.items()},
         physics_params=fit_physics(df),
         feature_names=names,
     )
@@ -145,14 +174,21 @@ def cross_validate(df: pd.DataFrame, n_splits: int = 5, alpha: float = 0.10, use
 
 # --------------------------------------------------------------------------- team effects
 def team_corner_deficit(oof: pd.DataFrame, n_boot: int = 400, seed: int = 4) -> pd.DataFrame:
-    """Mean out-of-fold residual (observed - expected, km/h) per team and corner speed class.
+    """Corner minimum speed vs the *other* teams at the same corner (km/h), by corner class.
 
-    The model has no team feature, so the residual is how much faster or slower a team is
-    than conditions and geometry predict. The bootstrap resamples events.
+    At one corner of one event, geometry and conditions are shared, so this is essentially a
+    like-for-like speed comparison (the model's residual cancels almost entirely once the
+    corner mean is removed). The comparison excludes the team itself. Bootstrap over events.
     """
     d = oof.assign(resid=oof["v_min_kmh"] - oof["pred_hybrid"])
-    # Remove the event-level mean so that track-wide model bias cancels
-    d["resid"] -= d.groupby(["event_key", "corner_key"])["resid"].transform("mean")
+    key = d["event_key"].astype(str) + "|" + d["corner_key"].astype(str)
+    team_mean = d.groupby([key, d["team"]])["resid"].transform("mean")
+    tot = d.groupby(key)["resid"].transform("sum")
+    cnt = d.groupby(key)["resid"].transform("size")
+    team_sum = d.groupby([key, d["team"]])["resid"].transform("sum")
+    team_cnt = d.groupby([key, d["team"]])["resid"].transform("size")
+    others = (tot - team_sum) / (cnt - team_cnt).replace(0, np.nan)
+    d["resid"] = team_mean - others
     events = d["event_key"].unique()
     rng = np.random.default_rng(seed)
     rows = []
@@ -233,23 +269,27 @@ def exact_baseline_shapley(
     return phi
 
 
-def hybrid_shapley(df: pd.DataFrame, rows: pd.Series | np.ndarray) -> tuple[pd.DataFrame, list[str]]:
-    """Shapley attribution of the hybrid model's prediction for the selected rows.
+def hybrid_shapley(df: pd.DataFrame, rows: np.ndarray) -> tuple[pd.DataFrame, list[str]]:
+    """Exact Shapley attribution of the reported hybrid model (lap-sim prior + boosted residual).
 
-    The physics baseline enters as one group (radius + density through the physics
-    formula); each remaining feature is its own group.
+    Groups: the physics prior `v_sim_kmh` (one group) and each remaining feature. The model is
+    refitted on all rows for attribution; validation numbers come from `cross_validate`.
     """
-    a, b = fit_physics(df)
-    x_all = df[NUMERIC_FEATURES].to_numpy(float)
-    phys = physics_speed_kmh(df["radius_m"].to_numpy(), df["rho_kg_m3"].to_numpy(), a, b)
-    gbm = _gbm().fit(x_all, df["v_min_kmh"].to_numpy() - phys)
-    i_r, i_rho = NUMERIC_FEATURES.index("radius_m"), NUMERIC_FEATURES.index("rho_kg_m3")
+    d = df[df["v_sim_kmh"].notna()].reset_index(drop=True) if "v_sim_kmh" in df else df
+    if "v_sim_kmh" not in d or d.empty:
+        return pd.DataFrame(), []
+    sel_mask = np.zeros(len(df), dtype=bool)
+    sel_mask[np.asarray(rows)] = True
+    sel = sel_mask[df["v_sim_kmh"].notna().to_numpy()]
+    x_feat = d[NUMERIC_FEATURES].to_numpy(float)
+    gbm = _gbm().fit(x_feat, d["v_min_kmh"].to_numpy() - d["v_sim_kmh"].to_numpy())
+    x_all = np.column_stack([d["v_sim_kmh"].to_numpy(), x_feat])
 
     def predict(xm: np.ndarray) -> np.ndarray:
-        return physics_speed_kmh(xm[:, i_r], xm[:, i_rho], a, b) + gbm.predict(xm)
+        return xm[:, 0] + gbm.predict(xm[:, 1:])
 
-    groups = [[i] for i in range(len(NUMERIC_FEATURES))]
-    baseline = np.median(x_all, axis=0)
-    sel = x_all[np.asarray(rows)]
-    phi = exact_baseline_shapley(predict, sel, baseline, groups)
-    return pd.DataFrame(phi, columns=NUMERIC_FEATURES), NUMERIC_FEATURES
+    names = ["physics_prior"] + NUMERIC_FEATURES
+    phi = exact_baseline_shapley(predict, x_all[sel], np.median(x_all, axis=0), [[i] for i in range(len(names))])
+    out = pd.DataFrame(phi, columns=names)
+    out.index = np.flatnonzero(sel)
+    return out, names

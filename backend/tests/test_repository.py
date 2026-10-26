@@ -3,7 +3,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-
 from amr_aerotwin.data.repository import DataUnavailableError, TelemetryRepository, fastest_valid_lap, vector_mean_wind
 
 

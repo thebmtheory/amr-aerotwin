@@ -3,7 +3,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-
 from amr_aerotwin.domain import GRAVITY_ACCEL as G
 from amr_aerotwin.physics.vehicle_params import fit_grip_vs_q, limit_points_for_fit
 

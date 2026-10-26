@@ -1,119 +1,194 @@
-"""Separating a straight-line deficit into power and drag from acceleration vs speed.
+"""Straight-line performance: joint estimate of power and drag differences between cars.
 
-On a straight at full throttle, m a = P / v - q CdA - m g Crr. Comparing one car with the
-field median *at the same speed and event*, a deficit in power and a deficit in drag leave
-different fingerprints in the acceleration gap:
+On a straight at full throttle, with gravity removed using the road gradient,
 
-    power deficit dP:   da(v) = dP / (m v)              -> m * da * v is flat in v
-    drag deficit dCdA:  da(v) = -rho v^2 dCdA / (2 m)    -> m * da * v grows like v^3
-    traction limit:     da concentrated at low speed, vanishing at high speed
+    m (a_x + g * grade + g * Crr) = P / v - q * CdA
 
-So the gap is expressed as a "power-equivalent" deficit m * da * v in speed bands. If that
-number is roughly constant across bands, the deficit behaves like missing power; if it
-grows steeply with speed, like extra drag. Speeds are capped at 285 km/h in 2026, below the
-regulated MGU-K taper, so the comparison is between cars with the same electrical limit.
-The power here is *deployed* wheel power: it includes the energy-management strategy, not
-only the power unit's peak output.
+so each car's samples give a regression for (P, CdA). Power and drag are strongly
+collinear over the speed range of one straight (both terms fall with speed), which is why
+this module reports their *joint* uncertainty instead of claiming one or the other.
+
+Design choices (each guards against a specific bias found in review):
+- Gravity is removed with the GPS-altitude gradient (Spa's Kemmel straight climbs ~4%).
+- Only the acceleration phase of each straight is used: from the straight's start to the
+  position where the *field-median* speed peaks. The cut is positional, not based on a
+  car's own acceleration, so energy clipping (deceleration at full throttle late on a
+  2026 straight) is excluded without selecting on the outcome.
+- Samples within 150 m of the car ahead are dropped (slipstream lowers drag).
+- In 2026 only speeds below 285 km/h are used, under the regulated MGU-K taper.
+- A team is compared with the median of the *other* teams at the same event.
+- Uncertainty is an event-level bootstrap of the joint (dP, dCdA) estimate.
+
+The power here is *deployed* wheel power: it includes energy-management strategy, not only
+the power unit's output.
 """
 
 from __future__ import annotations
 
+import warnings
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
+from amr_aerotwin.domain import GRAVITY_ACCEL
 from amr_aerotwin.physics.dynamics import VehicleState
-from amr_aerotwin.physics.vehicle_params import straight_segments
+from amr_aerotwin.physics.vehicle_params import CRR, straight_segments
 
-BAND_KMH = 20.0
-MIN_SPEED_KMH = 160.0
-
-
-def max_band_speed(season: int) -> float:
-    return 280.0 if season >= 2026 else 320.0
+TOW_GAP_M = 150.0
+MIN_SPEED_KMH = 150.0
 
 
-def acceleration_samples(state: VehicleState) -> pd.DataFrame:
-    """Full-throttle, low-lateral-load (speed, acceleration) samples from one lap."""
-    season = state.lap.meta.season
-    rows = []
-    for seg in straight_segments(state, min_length_m=120.0, trim_m=10.0, max_speed_kmh=max_band_speed(season) + 5):
-        rows.append(pd.DataFrame({"v_kmh": state.speed_smooth_ms[seg][::2] * 3.6, "ax": state.ax_ms2[seg][::2]}))
-    if not rows:
-        return pd.DataFrame(columns=["v_kmh", "ax"])
-    return pd.concat(rows, ignore_index=True)
+def max_fit_speed_kmh(season: int) -> float:
+    return 285.0 if season >= 2026 else 330.0
 
 
-def band_medians(samples: pd.DataFrame, season: int) -> pd.DataFrame:
-    """Median acceleration per speed band (one row per band with >= 3 samples)."""
-    s = samples[(samples["v_kmh"] >= MIN_SPEED_KMH) & (samples["v_kmh"] < max_band_speed(season))].copy()
-    s["band"] = (s["v_kmh"] // BAND_KMH) * BAND_KMH
-    g = s.groupby("band")["ax"].agg(["median", "size"]).reset_index()
-    return g[g["size"] >= 3].rename(columns={"median": "ax", "size": "n"})
+def acceleration_phase_mask(states: list[VehicleState], ref: VehicleState) -> NDArray[np.bool_]:
+    """Grid positions on the acceleration phase of each straight (positional, same for all cars)."""
+    n = len(ref.distance_m)
+    mask = np.zeros(n, dtype=bool)
+    v_field = np.median(np.vstack([s.speed_smooth_ms for s in states]), axis=0)
+    for seg in straight_segments(ref, min_length_m=250.0, trim_m=10.0):
+        peak = int(np.argmax(v_field[seg]))
+        mask[seg[: max(peak - 2, 0)]] = True
+    cap = max_fit_speed_kmh(ref.lap.meta.season) / 3.6
+    return mask & (v_field <= cap) & (v_field >= MIN_SPEED_KMH / 3.6)
 
 
-def acceleration_deficit(
-    bands: pd.DataFrame, team: str, n_boot: int = 500, seed: int = 0
-) -> pd.DataFrame:
-    """Team's acceleration gap to the field median per speed band, with an event bootstrap.
+def lap_samples(state: VehicleState, mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+    """Positions in `mask` where this car is flat out, not braking, unloaded and not in a tow."""
+    lap = state.lap
+    gap = lap.gap_ahead_m if len(lap.gap_ahead_m) == len(mask) else np.full(len(mask), np.inf)
+    return (
+        mask & (lap.throttle_pct >= 99.0) & (lap.brake < 0.5)
+        & (np.abs(state.ay_ms2) < 0.6 * GRAVITY_ACCEL) & (gap > TOW_GAP_M)
+    )
 
-    `bands` columns: season, round, team, band, ax, mass_kg (one season).
-    Returns band, d_ax (m/s^2), ci, power-equivalent deficit (kW) and its ci.
-    """
-    b = bands.copy()
-    b["field"] = b.groupby(["round", "band"])["ax"].transform("median")
-    b["d_ax"] = b["ax"] - b["field"]
-    t = b[b["team"] == team]
-    rng = np.random.default_rng(seed)
-    rows = []
-    for band, g in t.groupby("band"):
-        by_event = g.groupby("round")["d_ax"].mean()
-        if len(by_event) < 4:
+
+@dataclass(frozen=True)
+class PowerDragFit:
+    power_kw: float
+    cda_m2: float
+    n_samples: int
+
+
+def fit_power_drag(states: list[VehicleState], mask: NDArray[np.bool_]) -> PowerDragFit | None:
+    """Least-squares (P, CdA) from one team's laps on the acceleration-phase positions."""
+    xs, ys = [], []
+    for st in states:
+        sel = lap_samples(st, mask)
+        if sel.sum() == 0:
             continue
-        boots = np.array([rng.choice(by_event.to_numpy(), len(by_event)).mean() for _ in range(n_boot)])
-        v = (band + BAND_KMH / 2) / 3.6
-        m = float(g["mass_kg"].iloc[0])
+        v = st.speed_smooth_ms[sel]
+        ys.append(st.mass_kg * (st.ax_propulsive_ms2[sel] + GRAVITY_ACCEL * CRR))
+        xs.append(np.column_stack([1.0 / v, -st.q_dyn_pa[sel]]))
+    if not xs:
+        return None
+    x, y = np.vstack(xs), np.concatenate(ys)
+    if len(y) < 15:
+        return None
+    beta = np.linalg.lstsq(x, y, rcond=None)[0]
+    return PowerDragFit(power_kw=float(beta[0] / 1000.0), cda_m2=float(beta[1]), n_samples=len(y))
+
+
+def position_matched_deficit_kw(
+    states_by_team: dict[str, list[VehicleState]], mask: NDArray[np.bool_], team: str
+) -> float:
+    """Mean m * (a_team - median a_others) * v over shared positions (power-equivalent, kW)."""
+    per_team = {}
+    for t, sts in states_by_team.items():
+        stack = [np.where(lap_samples(st, mask), st.ax_propulsive_ms2, np.nan) for st in sts]
+        with np.errstate(all="ignore"):
+            per_team[t] = np.nanmean(np.vstack(stack), axis=0)
+    if team not in per_team or len(per_team) < 5:
+        return float("nan")
+    others = np.vstack([a for t, a in per_team.items() if t != team])
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # positions no other car used
+        field = np.nanmedian(others, axis=0)
+    enough = np.sum(np.isfinite(others), axis=0) >= 4
+    ok = np.isfinite(per_team[team]) & np.isfinite(field) & enough
+    if ok.sum() < 10:
+        return float("nan")
+    st = states_by_team[team][0]
+    return float(np.mean(st.mass_kg * (per_team[team][ok] - field[ok]) * st.speed_smooth_ms[ok]) / 1000.0)
+
+
+def event_power_drag_rows(states: dict[str, VehicleState], ref: VehicleState) -> pd.DataFrame:
+    """One row per team: fitted (P, CdA) and the position-matched deficit at this event."""
+    mask = acceleration_phase_mask(list(states.values()), ref)
+    by_team: dict[str, list[VehicleState]] = {}
+    for st in states.values():
+        by_team.setdefault(st.lap.meta.team, []).append(st)
+    rows = []
+    for team, sts in sorted(by_team.items()):
+        fit = fit_power_drag(sts, mask)
         rows.append({
-            "band_kmh": float(band), "d_ax": float(by_event.mean()),
-            "d_ax_lo": float(np.percentile(boots, 5)), "d_ax_hi": float(np.percentile(boots, 95)),
-            "d_power_kw": float(by_event.mean() * m * v / 1000),
-            "d_power_lo": float(np.percentile(boots, 5) * m * v / 1000),
-            "d_power_hi": float(np.percentile(boots, 95) * m * v / 1000),
-            "n_events": int(len(by_event)),
+            "team": team,
+            "power_kw": fit.power_kw if fit else np.nan,
+            "cda_m2": fit.cda_m2 if fit else np.nan,
+            "n_samples": fit.n_samples if fit else 0,
+            "matched_deficit_kw": position_matched_deficit_kw(by_team, mask, team),
+            "mass_kg": sts[0].mass_kg,
+            "n_positions": int(mask.sum()),
         })
     return pd.DataFrame(rows)
 
 
-def power_or_drag_signature(deficit: pd.DataFrame) -> dict[str, float]:
-    """Log-log slope of |power-equivalent deficit| vs speed: ~0 => power-like, ~3 => drag-like.
-
-    Also returns the mean power-equivalent deficit across bands.
-    """
-    d = deficit[np.abs(deficit["d_power_kw"]) > 1e-6]
-    if len(d) < 3:
-        return {"slope": float("nan"), "mean_kw": float("nan")}
-    x = np.log((d["band_kmh"] + BAND_KMH / 2).to_numpy())
-    y = np.log(np.abs(d["d_power_kw"].to_numpy()))
-    slope = float(np.polyfit(x, y, 1)[0])
-    return {"slope": slope, "mean_kw": float(deficit["d_power_kw"].mean()),
-            "all_bands_negative": bool((deficit["d_ax_hi"] < 0).all()),
-            "all_bands_positive": bool((deficit["d_ax_lo"] > 0).all())}
+@dataclass(frozen=True)
+class JointDeficit:
+    d_power_kw: float
+    d_power_ci90: tuple[float, float]
+    d_cda_m2: float
+    d_cda_ci90: tuple[float, float]
+    correlation: float
+    matched_kw: float
+    matched_ci90: tuple[float, float]
+    n_events: int
+    draws: NDArray[np.float64]  # bootstrap draws of the mean (dP kW, dCdA m^2)
+    per_event: pd.DataFrame
 
 
-def power_deficit_summary(
-    bands: pd.DataFrame, team: str, min_band_kmh: float = 200.0, n_boot: int = 2000, seed: int = 1
-) -> dict[str, float]:
-    """Mean power-equivalent deficit over bands >= min_band_kmh with an event bootstrap CI.
+def per_event_deltas(rows: pd.DataFrame, team: str) -> pd.DataFrame:
+    """Team minus median of the other teams, per event, for P, CdA and the matched deficit."""
+    out = []
+    for rnd, g in rows.groupby("round"):
+        t = g[g["team"] == team]
+        o = g[(g["team"] != team) & g["power_kw"].notna()]
+        if t.empty or len(o) < 4 or not np.isfinite(t["power_kw"].iloc[0]):
+            continue
+        out.append({
+            "round": int(rnd),
+            "event": str(t["event"].iloc[0]) if "event" in t else "",
+            "d_power_kw": float(t["power_kw"].iloc[0] - o["power_kw"].median()),
+            "d_cda_m2": float(t["cda_m2"].iloc[0] - o["cda_m2"].median()),
+            "matched_kw": float(t["matched_deficit_kw"].iloc[0]),
+        })
+    return pd.DataFrame(out)
 
-    Each event contributes the mean of its bands, so events with more bands do not dominate.
-    """
-    b = bands.copy()
-    b["field"] = b.groupby(["round", "band"])["ax"].transform("median")
-    b["d_kw"] = (b["ax"] - b["field"]) * b["mass_kg"] * (b["band"] + BAND_KMH / 2) / 3.6 / 1000
-    t = b[(b["team"] == team) & (b["band"] >= min_band_kmh)]
-    per_event = t.groupby("round")["d_kw"].mean()
-    if len(per_event) < 3:
-        return {"mean_kw": float("nan"), "lo": float("nan"), "hi": float("nan"), "n_events": int(len(per_event))}
+
+def joint_deficit(rows: pd.DataFrame, team: str, n_boot: int = 2000, seed: int = 0,
+                  exclude_round: int | None = None) -> JointDeficit | None:
+    """Event-bootstrap of the mean (dP, dCdA) of `team` vs the field, for one season of rows."""
+    pe = per_event_deltas(rows, team)
+    if exclude_round is not None and not pe.empty:
+        pe = pe[pe["round"] != exclude_round]
+    if len(pe) < 4:
+        return None
+    arr = pe[["d_power_kw", "d_cda_m2"]].to_numpy()
     rng = np.random.default_rng(seed)
-    boots = [rng.choice(per_event.to_numpy(), len(per_event)).mean() for _ in range(n_boot)]
-    return {"mean_kw": float(per_event.mean()), "lo": float(np.percentile(boots, 5)),
-            "hi": float(np.percentile(boots, 95)), "n_events": int(len(per_event))}
+    draws = arr[rng.integers(0, len(arr), size=(n_boot, len(arr)))].mean(axis=1)
+    mk = pe["matched_kw"].dropna().to_numpy()
+    mk_boot = mk[rng.integers(0, len(mk), size=(n_boot, len(mk)))].mean(axis=1) if len(mk) else np.array([np.nan])
+
+    def ci(a: NDArray[np.float64]) -> tuple[float, float]:
+        return float(np.nanpercentile(a, 5)), float(np.nanpercentile(a, 95))
+
+    return JointDeficit(
+        d_power_kw=float(arr[:, 0].mean()), d_power_ci90=ci(draws[:, 0]),
+        d_cda_m2=float(arr[:, 1].mean()), d_cda_ci90=ci(draws[:, 1]),
+        correlation=float(np.corrcoef(draws[:, 0], draws[:, 1])[0, 1]),
+        matched_kw=float(np.mean(mk)) if len(mk) else float("nan"), matched_ci90=ci(mk_boot),
+        n_events=len(pe), draws=draws, per_event=pe,
+    )

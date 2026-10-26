@@ -11,8 +11,8 @@ from scipy.signal import savgol_filter
 from amr_aerotwin.domain import GRAVITY_ACCEL, AlignedLap, regulations_for
 from amr_aerotwin.physics.kinematics import (
     compute_air_density_kg_m3,
-    gps_spline_kinematics,
     decompose_aero_wind_vectors,
+    gps_spline_kinematics,
     path_curvature,
     turning_number,
 )
@@ -55,6 +55,8 @@ class VehicleState:
     speed_smooth_ms: NDArray[np.float64]
     ax_ms2: NDArray[np.float64]
     ay_ms2: NDArray[np.float64]  # signed: + = left turn
+    grade: NDArray[np.float64]  # dz/ds (+ = uphill); gravity adds -g * grade to a_x
+    ax_propulsive_ms2: NDArray[np.float64]  # a_x + g * grade: acceleration with gravity removed
     v_headwind_ms: NDArray[np.float64]
     v_crosswind_ms: NDArray[np.float64]
     v_airspeed_ms: NDArray[np.float64]
@@ -77,6 +79,17 @@ def longitudinal_acceleration(speed_ms: NDArray[np.float64], step_m: float) -> N
     """a_x = v dv/ds on a closed lap (periodic central difference)."""
     dv_ds = (np.roll(speed_ms, -1) - np.roll(speed_ms, 1)) / (2.0 * step_m)
     return speed_ms * dv_ds
+
+
+def track_grade(z_m: NDArray[np.float64], step_m: float, window_m: float = 150.0) -> NDArray[np.float64]:
+    """Road gradient dz/ds from GPS altitude, smoothed over ~150 m (closed lap).
+
+    Altitude is quantised to 0.1 m and noisy, so only the long-wavelength slope is kept.
+    A 4% climb (Spa's Kemmel straight) costs 0.4 m/s^2, about 30 kW at 300 km/h.
+    """
+    w = max(5, int(round(window_m / step_m)) | 1)
+    zs = savgol_filter(z_m, w, 2, mode="wrap")
+    return (np.roll(zs, -1) - np.roll(zs, 1)) / (2.0 * step_m)
 
 
 def classify_regimes(
@@ -144,6 +157,7 @@ def estimate_vehicle_state(
     v = smooth_speed(lap.speed_ms, step)
     ax = longitudinal_acceleration(v, step)
     ay = v**2 * kappa
+    grade = track_grade(lap.z_m, step) if len(lap.z_m) == len(v) else np.zeros_like(v)
 
     wind = decompose_aero_wind_vectors(v, heading, lap.ambient)
     q = 0.5 * rho * wind["v_airspeed_ms"] ** 2
@@ -157,6 +171,8 @@ def estimate_vehicle_state(
         speed_smooth_ms=v,
         ax_ms2=ax,
         ay_ms2=ay,
+        grade=grade,
+        ax_propulsive_ms2=ax + GRAVITY_ACCEL * grade,
         v_headwind_ms=wind["v_headwind_ms"],
         v_crosswind_ms=wind["v_crosswind_ms"],
         v_airspeed_ms=wind["v_airspeed_ms"],

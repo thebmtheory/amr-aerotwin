@@ -7,7 +7,7 @@
   --surface: #ffffff;
   --ink: #0f1513;
   --ink-2: #44514c;
-  --muted: #74817c;
+  --muted: #5c6863;
   --rule: #d9e0dd;
   --amr: #00856a;
   --ref: #2a78d6;
@@ -27,13 +27,13 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0e1312; --band: #131a18; --surface: #171f1c; --ink: #e8efec; --ink-2: #b3c0bb;
-    --muted: #84918c; --rule: #29332f; --amr: #18a07f; --ref: #4a8ae0; --third: #d27d32;
+    --muted: #93a09b; --rule: #29332f; --amr: #18a07f; --ref: #4a8ae0; --third: #d27d32;
     --field: #5d6864; --focus: #4a8ae0; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0e1312; --band: #131a18; --surface: #171f1c; --ink: #e8efec; --ink-2: #b3c0bb;
-  --muted: #84918c; --rule: #29332f; --amr: #18a07f; --ref: #4a8ae0; --third: #d27d32;
+  --muted: #93a09b; --rule: #29332f; --amr: #18a07f; --ref: #4a8ae0; --third: #d27d32;
   --field: #5d6864; --focus: #4a8ae0; color-scheme: dark;
 }
 
@@ -113,7 +113,7 @@ h3 { font-weight: 600; font-size: var(--step-1); margin-bottom: 8px; }
 select { font: inherit; font-size: var(--step--1); background: var(--surface); color: var(--ink); border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px 8px; max-width: 100%; }
 .seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--bg); margin: 8px 0 0; }
 .seg button { font: 500 var(--step--1)/1 var(--font-body); background: transparent; color: var(--ink-2); border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
-.seg button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--rule); }
 .btn { font: 500 var(--step--1)/1 var(--font-body); background: var(--surface); color: var(--ink); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px 14px; cursor: pointer; }
 
 /* Tables */
@@ -144,3 +144,5 @@ table.data tr.amr td:first-child { box-shadow: inset 3px 0 0 var(--amr); }
 .kv dd { margin: 0; font-family: var(--font-mono); color: var(--ink); }
 .foot { margin-top: 32px; }
 ul.small { padding-left: 18px; }
+
+.subhead { margin-top: 36px; }

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from amr_aerotwin.data.repository import TelemetryRepository
 
 FIXTURE_CACHE = Path(__file__).parent / "fixtures" / "cache"

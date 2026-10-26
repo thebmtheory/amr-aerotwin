@@ -7,7 +7,7 @@
 
 <header class="masthead">
   <div class="wrap masthead-inner">
-    <a class="brand" href="#top">AMR Track Science</a>
+    <a class="brand" href="#top">Track Science</a>
     <nav class="nav" aria-label="Sections">
       <a href="#finding">Finding</a>
       <a href="#upgrades">Upgrades</a>
@@ -24,8 +24,8 @@
 
 <main id="top">
   <section class="hero wrap">
-    <p class="eyebrow">Public timing data · 2025 and 2026 seasons · <span data-fill="n_events"></span> Grands Prix</p>
-    <h1>Aston Martin’s 2026 straight-line deficit behaves like missing power, not drag.</h1>
+    <p class="eyebrow">Independent analysis of public timing data · 2025 and 2026 seasons · <span data-fill="n_events"></span> Grands Prix</p>
+    <h1>Aston Martin loses its time in slow corners, and in 2026 it pays for them again at the end of every straight.</h1>
     <p class="lede" data-fill="hero_lede"></p>
     <div class="tiles" id="tiles"></div>
     <p class="note" data-fill="hero_note"></p>
@@ -33,26 +33,36 @@
 
   <section id="finding" class="band">
     <div class="wrap">
-      <h2>The fingerprint of a power deficit</h2>
-      <div class="prose">
-        <p>On a straight at full throttle, <span class="eq">m·a = P/v − ½ρv²·C<sub>D</sub>A</span>. Comparing a car with the rest of the field at the same speed and the same event, a shortfall in power and an excess of drag leave different marks. A power deficit costs the same number of kilowatts at every speed. A drag deficit costs kilowatts that grow with the cube of speed. A traction problem shows up only at low speed.</p>
-        <p data-fill="finding_text"></p>
+      <h2>Where the gap comes from</h2>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Aston Martin’s qualifying gap to pole by type of track section</strong> <span>s per lap, mean over events · 90% interval</span></figcaption>
+          <div id="ch-gapclass" class="chart" role="img" aria-label="Gap to pole by corner class, 2025 and 2026"></div>
+        </figure>
+        <div class="prose">
+          <p>Each lap is aligned with the pole lap and the time difference is split into the braking, apex and exit phases of every corner (120 m either side of the marker), grouped by how fast the corner is, plus everything in between. The split adds up to the official gap exactly.</p>
+          <p data-fill="decomp_text"></p>
+        </div>
+      </div>
+      <h3 class="subhead">Speed along the straights</h3>
+      <div class="prose"><p data-fill="finding_text"></p></div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Speed gap to the other teams along the main straights</strong> <span>km/h, 10 equal pieces from corner exit to braking point · band = 90% interval</span></figcaption>
+          <div id="ch-profile" class="chart" role="img" aria-label="Speed gap along the straights"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>How the gap changes in each half of the straight, 2026</strong> <span>km/h · 90% interval over events</span></figcaption>
+          <div id="ch-halves" class="chart" role="img" aria-label="First and second half changes by team"></div>
+        </figure>
       </div>
       <div class="grid2">
         <figure class="fig">
-          <figcaption><strong>Power-equivalent acceleration deficit vs the field</strong> <span>m·Δa·v, kW, by speed band · 90% interval over events</span></figcaption>
-          <div id="ch-power" class="chart" role="img" aria-label="Power-equivalent deficit by speed band"></div>
+          <figcaption><strong>Power or drag? The data cannot tell</strong> <span>bootstrap draws of the joint estimate vs the field</span></figcaption>
+          <div id="ch-joint" class="chart" role="img" aria-label="Joint power and drag estimate"></div>
         </figure>
-        <figure class="fig">
-          <figcaption><strong>Shape test: log-log slope of the deficit vs speed</strong> <span>0 = power-like · 3 = drag-like</span></figcaption>
-          <div id="ch-slope" class="chart" role="img" aria-label="Deficit slope per team"></div>
-        </figure>
+        <div class="prose"><p data-fill="joint_text"></p></div>
       </div>
-      <figure class="fig wide">
-        <figcaption><strong>Aston Martin’s qualifying gap to pole, explained by the calibrated lap simulator</strong> <span>2026 events with clean geometry · seconds</span></figcaption>
-        <div id="ch-decomp" class="chart tall" role="img" aria-label="Gap decomposition per event"></div>
-      </figure>
-      <p class="caption" data-fill="decomp_text"></p>
     </div>
   </section>
 
@@ -200,16 +210,18 @@
         <h3>Corner minimum-speed model</h3>
         <p class="small" data-fill="corner_text"></p>
         <div class="table-wrap"><table class="data" id="tbl-cm"></table></div>
+        <h3 class="subhead">Accounting for the gap with the lap simulator</h3>
+        <p class="small" data-fill="accounting_text"></p>
       </div>
       <figure class="fig">
-        <figcaption><strong>Corner speed vs conditions-adjusted expectation</strong> <span>km/h by corner class · 90% interval over events</span></figcaption>
+        <figcaption><strong>Corner minimum speed vs the other teams at the same corner</strong> <span>km/h by corner class · 90% interval over events</span></figcaption>
         <div class="seg" role="tablist" id="seg-deficit"></div>
         <div id="ch-deficit" class="chart" role="img" aria-label="Team corner deficit"></div>
       </figure>
     </div>
     <div class="grid2">
       <figure class="fig">
-        <figcaption><strong>Car or driver?</strong> <span>share of qualifying-gap variance between teams · 90% interval</span></figcaption>
+        <figcaption><strong>How much is the car?</strong> <span>between-team share of qualifying-gap variance · 90% interval</span></figcaption>
         <div id="ch-var" class="chart short" role="img" aria-label="Variance share"></div>
         <p class="small" data-fill="var_text"></p>
       </figure>

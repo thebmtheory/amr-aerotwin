@@ -7,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from amr_aerotwin.physics.lapsim import VehicleParams, simulate_lap
 from conftest import stadium_track
 

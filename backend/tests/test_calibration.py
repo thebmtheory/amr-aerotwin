@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-
 from amr_aerotwin.modeling.calibration import (
     calibrate_lapsim,
     effective_sample_size,

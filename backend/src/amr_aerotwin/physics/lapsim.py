@@ -50,7 +50,7 @@ class VehicleParams:
     low_drag_cda_m2: float | None = None  # CdA with DRS / straight-line mode open
     long_grip_scale: float = 1.0  # longitudinal / lateral friction ratio (friction ellipse)
 
-    def scaled(self, **factors: float) -> "VehicleParams":
+    def scaled(self, **factors: float) -> VehicleParams:
         """Copy with selected fields multiplied, e.g. scaled(cla_m2=1.01)."""
         return replace(self, **{k: getattr(self, k) * v for k, v in factors.items()})
 

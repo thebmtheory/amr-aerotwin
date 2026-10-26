@@ -9,3 +9,4 @@ data/telemetry_cache/
 data/fastf1_cache/
 data/processed/
 site/
+build/

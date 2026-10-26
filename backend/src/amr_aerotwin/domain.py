@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -14,6 +16,9 @@ KELVIN_OFFSET: float = 273.15
 GRAVITY_ACCEL: float = 9.80665  # m / s^2
 
 TARGET_TEAM = "Aston Martin"
+
+# Data lives under ./data (or $AEROTWIN_DATA), not inside the installed package
+DATA_DIR = Path(os.environ.get("AEROTWIN_DATA", Path.cwd() / "data")).resolve()
 TARGET_DRIVERS = ("ALO", "STR")
 
 
@@ -130,6 +135,7 @@ class AlignedLap:
     y_m: NDArray[np.float64]
     z_m: NDArray[np.float64]
     lap_length_m: float
+    gap_ahead_m: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))  # to car ahead, m
     distance_scale: float = 1.0  # odometer metres per GPS-path metre (see ReferenceLine)
     # Original GPS fixes projected onto the reference line (for curvature estimation)
     gps_time_s: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))

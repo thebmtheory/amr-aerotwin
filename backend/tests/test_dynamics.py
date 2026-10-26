@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-
 from amr_aerotwin.domain import GRAVITY_ACCEL as G
 from amr_aerotwin.domain import mgu_k_power_limit_kw
 from amr_aerotwin.physics.dynamics import (

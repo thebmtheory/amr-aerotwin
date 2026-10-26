@@ -2,11 +2,9 @@
 
 import numpy as np
 import pytest
-
 from amr_aerotwin.domain import GRAVITY_ACCEL as G
 from amr_aerotwin.physics.lapsim import (
     LIMIT_BRAKE,
-    LIMIT_CORNER,
     VehicleParams,
     iso_lap_time_grid,
     lap_time_sensitivities,

@@ -12,12 +12,11 @@ Model (ordinary least squares with fixed effects, one race at a time):
 Fuel and tyre age are separable because tyre age resets at every stop while lap number
 does not. Laps are filtered to green-flag running (no pit in/out laps, no lap 1, track
 status '1', within 107% of the driver's median) and gross outliers are trimmed iteratively.
-Uncertainty comes from a Bayesian bootstrap over stints (Rubin 1981): each draw gives every
-stint a Dirichlet weight, since laps within a stint share traffic, tyre and setup effects.
-Unlike resampling stints with replacement, every stint stays in every draw, so the fixed-
-effect design never becomes rank-deficient. With only ~40 stints per race, cluster methods
-are biased low (a Monte Carlo check in the tests shows ~35% too narrow), so every reported
-interval is the wider of the bootstrap interval and the classical OLS interval.
+Uncertainty comes from a wild cluster bootstrap by driver (Cameron, Gelbach and Miller
+2008) with Webb's six-point weights, which behave well with ~20 clusters. Every draw keeps
+the design fixed and repeats the outlier trimming. The tests check interval coverage by
+Monte Carlo with autocorrelated within-stint errors and stint-level offsets. With fewer
+than about 12 drivers (clusters) the intervals become too narrow.
 """
 
 from __future__ import annotations
@@ -113,31 +112,27 @@ def fit_race_pace(
         return None
     coef, used, resid_sd = _fit(d, ref)
 
+    # Wild cluster bootstrap by driver (Webb six-point weights), trimming repeated in every
+    # draw. Residuals of one driver share a weight, so within-driver correlation (traffic,
+    # tyre state, stint offsets) is preserved.
     rng = np.random.default_rng(seed)
-    stint_codes, stint_index = np.unique(used["stint_key"].to_numpy(), return_inverse=True)
+    x_used, names_used = _design(used, ref)
+    fitted = x_used @ coef.reindex(names_used).to_numpy()
+    resid = used["time"].to_numpy() - fitted
+    drv_codes, drv_index = np.unique(used["drv"].to_numpy(), return_inverse=True)
+    webb = np.array([-np.sqrt(1.5), -1.0, -np.sqrt(0.5), np.sqrt(0.5), 1.0, np.sqrt(1.5)])
     boots = []
     for _ in range(n_boot):
-        w_stint = rng.dirichlet(np.ones(len(stint_codes))) * len(stint_codes)
-        b, _, _ = _fit(used, ref, weights=w_stint[stint_index])
+        w = rng.choice(webb, size=len(drv_codes))[drv_index]
+        b, _, _ = _fit(used.assign(time=fitted + w * resid), ref, trim_iters=2)
         boots.append(b.reindex(coef.index))
     bt = pd.DataFrame(boots)
-
-    x_used, names_used = _design(used, ref)
-    resid = used["time"].to_numpy() - x_used @ coef.reindex(names_used).to_numpy()
-    dof = max(len(used) - x_used.shape[1], 1)
-    cov_iid = float(resid @ resid / dof) * np.linalg.pinv(x_used.T @ x_used)
-    pos = {n: i for i, n in enumerate(names_used)}
-
-    def widen(center: float, lo: float, hi: float, var: float) -> tuple[float, float]:
-        half = 1.6448536 * np.sqrt(max(var, 0.0))
-        return (float(min(lo, center - half)), float(max(hi, center + half)))
 
     def ci(name: str) -> tuple[float, float]:
         col = bt[name].dropna()
         if len(col) <= 10:
             return (np.nan, np.nan)
-        return widen(float(coef[name]), float(col.quantile(0.05)), float(col.quantile(0.95)),
-                     cov_iid[pos[name], pos[name]])
+        return float(col.quantile(0.05)), float(col.quantile(0.95))
 
     drivers = sorted(used["drv"].unique())
     dp = pd.DataFrame(
@@ -157,18 +152,11 @@ def fit_race_pace(
         t: bt[[f"alpha:{x}" for x in dp[dp["team"] == t]["driver"]]].min(axis=1).to_numpy() for t in teams
     }
     best = min(team_vals.values())
-    best_team = min(team_vals, key=team_vals.__getitem__)
     best_boot = np.min(np.vstack(list(team_boot.values())), axis=0)
-    team_driver = {t: dp[dp["team"] == t].sort_values("pace_s")["driver"].iloc[0] for t in teams}
 
     def gap_ci(t: str) -> tuple[float, float]:
         diff = team_boot[t] - best_boot
-        lo, hi = float(np.nanquantile(diff, 0.05)), float(np.nanquantile(diff, 0.95))
-        if t == best_team:
-            return lo, hi
-        i, j = pos[f"alpha:{team_driver[t]}"], pos[f"alpha:{team_driver[best_team]}"]
-        var = cov_iid[i, i] + cov_iid[j, j] - 2 * cov_iid[i, j]
-        return widen(team_vals[t] - best, lo, hi, var)
+        return float(np.nanquantile(diff, 0.05)), float(np.nanquantile(diff, 0.95))
 
     cis = {t: gap_ci(t) for t in teams}
     tp = pd.DataFrame(

@@ -58,6 +58,7 @@ class RawLap:
     y_m: NDArray[np.float64]
     z_m: NDArray[np.float64]
     is_gps_fix: NDArray[np.bool_]  # original ~4 Hz position samples (the rest are interpolated)
+    gap_ahead_m: NDArray[np.float64]  # distance to the car ahead on track (inf when none)
 
 
 def parse_raw_lap(raw_tel: dict[str, Any]) -> RawLap:
@@ -72,8 +73,8 @@ def parse_raw_lap(raw_tel: dict[str, Any]) -> RawLap:
     t = col("time")
     # The archive linearly interpolates GPS onto car-data timestamps. Original fixes are the
     # samples whose decimetre coordinates are whole numbers.
-    xyz = np.column_stack([col("x"), col("y"), col("z")])
-    is_fix = np.all(np.mod(xyz, 1.0) == 0.0, axis=1)
+    xyz = np.column_stack([col("x", np.nan), col("y", np.nan), col("z", np.nan)])
+    is_fix = np.all(np.isfinite(xyz) & (np.mod(xyz, 1.0) == 0.0), axis=1)
     order = np.argsort(t, kind="stable")
     keep = np.concatenate([[True], np.diff(t[order]) > 0])
     idx = order[keep]
@@ -90,6 +91,7 @@ def parse_raw_lap(raw_tel: dict[str, Any]) -> RawLap:
         y_m=col("y")[idx] / 10.0,
         z_m=col("z")[idx] / 10.0,
         is_gps_fix=is_fix[idx],
+        gap_ahead_m=col("DistanceToDriverAhead", np.inf)[idx],
     )
 
 
@@ -314,6 +316,7 @@ def align_lap(
         x_m=x_grid,
         y_m=y_grid,
         z_m=lin(raw.z_m),
+        gap_ahead_m=np.interp(grid, s_in, np.nan_to_num(raw.gap_ahead_m[inside], posinf=1e6)),
         lap_length_m=length,
         distance_scale=ref.scale,
         gps_time_s=t_fix if sx is not None else np.zeros(0),

@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-
 from amr_aerotwin.data.alignment import (
     align_lap,
     build_reference_line,

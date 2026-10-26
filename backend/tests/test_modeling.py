@@ -3,7 +3,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-
 from amr_aerotwin.domain import AlignedLap, AmbientState, LapMeta
 from amr_aerotwin.modeling.energy import lap_energy_summary, straight_energy_metrics
 from amr_aerotwin.modeling.lap_compare import compare_laps, segment_time_loss
@@ -127,44 +126,136 @@ def test_race_pace_refuses_unidentifiable_single_strategy_race():
     assert fit_race_pace(same, dict(zip(same["drv"], same["team"])), n_boot=10) is None
 
 
-def test_race_pace_fuel_interval_has_nominal_coverage():
-    hits = 0
-    for seed in range(20):
-        laps, _ = _synthetic_race(seed)
-        lo, hi = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"])), n_boot=60).fuel_ci90
-        hits += lo <= -0.06 <= hi
-    assert hits / 20 >= 0.8  # nominal 90%
-
-
-def _bands(d_power_kw=0.0, d_cda=0.0, seed=0):
-    from amr_aerotwin.modeling.powertrain import BAND_KMH
-
+def _correlated_race(seed: int, n_drivers: int = 16, phi: float = 0.6, offset_sd: float = 0.12):
+    """Synthetic race with AR(phi) within-stint errors and stint-level offsets."""
     rng = np.random.default_rng(seed)
     rows = []
-    m, rho = 775.0, 1.2
-    for rnd in range(12):
-        for t in range(8):
-            team = "Aston Martin" if t == 0 else f"T{t}"
-            for band in np.arange(160, 280, BAND_KMH):
-                v = (band + BAND_KMH / 2) / 3.6
-                ax = 600e3 / (m * v) - 0.5 * rho * v * v * 1.3 / m + rng.normal(0, 0.05)
-                if t == 0:
-                    ax += d_power_kw * 1000 / (m * v) - 0.5 * rho * v * v * d_cda / m
-                rows.append({"season": 2026, "round": rnd, "team": team, "band": band, "ax": ax, "mass_kg": m})
+    for i in range(n_drivers):
+        d = f"D{i:02d}"
+        stop = 12 + (i * 3) % 20
+        for stint, laps in ((1, range(1, stop + 1)), (2, range(stop + 1, 51))):
+            offset = rng.normal(0, offset_sd)
+            e_prev = 0.0
+            for lap in laps:
+                comp = "MEDIUM" if stint == 1 else "HARD"
+                life = lap if stint == 1 else lap - stop
+                e_prev = phi * e_prev + rng.normal(0, 0.15)
+                t = 90 + 0.1 * i + (0.4 if comp == "HARD" else 0) + (0.05 if comp == "MEDIUM" else 0.03) * life - 0.06 * lap + offset + e_prev
+                rows.append({"drv": d, "team": f"T{i // 2}", "lap": lap, "time": t, "compound": comp, "life": life,
+                             "stint": stint, "status": "1", "del": False, "is_pit_in": lap == stop, "is_pit_out": lap == stop + 1})
     return pd.DataFrame(rows)
 
 
-def test_power_deficit_has_flat_power_equivalent_signature():
-    from amr_aerotwin.modeling.powertrain import acceleration_deficit, power_or_drag_signature
+@pytest.mark.parametrize("phi,offset_sd", [(0.0, 0.0), (0.6, 0.12)])
+def test_race_pace_intervals_cover(phi, offset_sd):
+    """Fuel-effect interval coverage with independent and with correlated lap errors."""
+    hits = 0
+    n = 20
+    for seed in range(n):
+        laps = _correlated_race(seed, phi=phi, offset_sd=offset_sd)
+        lo, hi = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"])), n_boot=120).fuel_ci90
+        hits += lo <= -0.06 <= hi
+    assert hits / n >= 0.75  # nominal 90%; cluster bootstrap with 16 clusters
 
-    d = acceleration_deficit(_bands(d_power_kw=-40.0), "Aston Martin")
-    assert np.allclose(d["d_power_kw"], -40.0, atol=4.0)
-    sig = power_or_drag_signature(d)
-    assert abs(sig["slope"]) < 0.5 and sig["all_bands_negative"]
+
+AMB_STD = AmbientState(15.0, 30.0, 1013.25 * 1.2 / 1.225, 0.0, 0.0, 0.0)
 
 
-def test_drag_deficit_has_steep_power_equivalent_signature():
-    from amr_aerotwin.modeling.powertrain import acceleration_deficit, power_or_drag_signature
+def _straight_lap(power_w, cda, grade=0.0, seed=0, team="T", driver="X"):
+    """A lap of three full-throttle straights integrated from m a = P/v - q CdA - m g (Crr + grade)."""
+    from amr_aerotwin.domain import GRAVITY_ACCEL as G
 
-    sig = power_or_drag_signature(acceleration_deficit(_bands(d_cda=0.15), "Aston Martin"))
-    assert sig["slope"] > 2.0
+    rng = np.random.default_rng(seed)
+    m, rho, step = 775.0, 1.2, 5.0
+    v_all, thr, z = [], [], [0.0]
+    for v0 in (42.0, 50.0, 58.0):
+        v = v0
+        for _ in range(int(600 / step)):
+            a = power_w / (m * v) - 0.5 * rho * v * v * cda / m - G * (0.012 + grade)
+            v = np.sqrt(v * v + 2 * a * step)
+            v_all.append(v + rng.normal(0, 0.02))
+            thr.append(100.0)
+            z.append(z[-1] + grade * step)
+        for _ in range(int(200 / step)):
+            v_all.append(max(v_all[-1] - 1.2, 30.0))
+            thr.append(0.0)
+            z.append(z[-1] - 3 * grade * step)  # descend while braking so the lap closes in altitude
+    n = len(v_all)
+    s = np.arange(n) * step
+    v_arr = np.array(v_all)
+    lap = AlignedLap(
+        meta=LapMeta(2026, "T", "Qualifying", driver, team, 1, float(np.sum(step / v_arr))), ambient=AMB_STD,
+        distance_m=s, time_s=np.cumsum(step / v_arr), speed_ms=v_arr, throttle_pct=np.array(thr),
+        brake=np.zeros(n), gear=np.full(n, 7.0), drs=np.zeros(n), rpm=np.zeros(n), x_m=s, y_m=np.zeros(n),
+        z_m=np.array(z[:n]), lap_length_m=n * step, gap_ahead_m=np.full(n, 1e6),
+    )
+    return estimate_vehicle_state(lap, mass_kg=m, curvature_inv_m=np.zeros(n))
+
+
+def test_power_drag_fit_recovers_values_and_removes_gradient():
+    from amr_aerotwin.modeling.powertrain import acceleration_phase_mask, fit_power_drag
+
+    for grade in (0.0, 0.04):
+        st = _straight_lap(600e3, 1.3, grade=grade)
+        fit = fit_power_drag([st], acceleration_phase_mask([st], st))
+        assert fit.power_kw == pytest.approx(600.0, rel=0.07), grade
+        assert fit.cda_m2 == pytest.approx(1.3, rel=0.15), grade  # P and CdA are collinear
+
+
+def test_acceleration_phase_mask_respects_speed_cap():
+    from amr_aerotwin.modeling.powertrain import acceleration_phase_mask
+
+    st = _straight_lap(600e3, 1.3)
+    mask = acceleration_phase_mask([st], st)
+    assert mask.any() and np.all(st.speed_smooth_ms[mask] * 3.6 <= 285.0 + 1e-6)
+
+
+def test_joint_deficit_reports_power_and_drag_with_their_correlation():
+    from amr_aerotwin.modeling.powertrain import joint_deficit
+
+    rng = np.random.default_rng(0)
+    rows = []
+    for rnd in range(12):
+        for t in range(9):
+            team = "Aston Martin" if t == 0 else f"T{t}"
+            p = 600 + rng.normal(0, 8) - (35 if t == 0 else 0)
+            cda = 1.3 + 0.03 * (p - 600) / 10 + rng.normal(0, 0.01)  # collinear, as in real fits
+            rows.append({"season": 2026, "round": rnd, "event": f"E{rnd}", "team": team, "power_kw": p,
+                         "cda_m2": cda, "matched_deficit_kw": -20 + rng.normal(0, 5)})
+    jd = joint_deficit(pd.DataFrame(rows), "Aston Martin")
+    assert jd.d_power_ci90[0] < -35 < jd.d_power_ci90[1]
+    assert jd.correlation > 0.5
+    assert jd.matched_ci90[0] < -20 < jd.matched_ci90[1]
+    assert joint_deficit(pd.DataFrame(rows), "Aston Martin", exclude_round=3).n_events == 11
+
+
+def test_geometry_check_accepts_figure_of_eight():
+    from amr_aerotwin.modeling.validation import expected_turn_count
+
+    t = np.linspace(0, 2 * np.pi, 800, endpoint=False)
+    assert expected_turn_count(np.cos(t), np.sin(t)) == 1
+    assert expected_turn_count(np.sin(t), np.sin(t) * np.cos(t)) == 0  # lemniscate
+    assert geometry_ok(0.01, expected_turns=0) and not geometry_ok(0.01, expected_turns=1)
+
+
+def test_speed_gap_profile_detects_late_straight_loss_and_flat_profiles():
+    from amr_aerotwin.modeling.energy import PROFILE_BINS, speed_gap_profile
+
+    rng = np.random.default_rng(1)
+    rows = []
+    for rnd in range(10):
+        for t in range(9):
+            team = "Aston Martin" if t == 0 else f"T{t}"
+            for b in range(PROFILE_BINS):
+                v = 200 + 10 * b + rng.normal(0, 0.5)
+                if t == 0:
+                    v -= 5 + (0 if b < 5 else 2 * (b - 4))  # constant exit deficit, then late loss
+                rows.append({"round": rnd, "team": team, "straight": 0, "bin": b, "speed_kmh": v})
+    prof = speed_gap_profile(pd.DataFrame(rows), "Aston Martin")
+    assert prof["gap_kmh"].iloc[0] == pytest.approx(-5, abs=0.5)
+    assert prof.attrs["second_half_kmh"] == pytest.approx(-8, abs=0.7)
+    assert abs(prof.attrs["first_half_kmh"]) < 0.7
+    lo, hi = prof.attrs["growth_ci90"]
+    assert hi < 0 and prof.attrs["drag_only_ratio"] > 1
+    flat = speed_gap_profile(pd.DataFrame(rows), "T3")
+    assert flat.attrs["growth_ci90"][0] < 0 < flat.attrs["growth_ci90"][1]
