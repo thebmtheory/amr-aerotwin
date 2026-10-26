@@ -31,6 +31,7 @@ from sklearn.linear_model import HuberRegressor
 
 from amr_aerotwin.domain import GRAVITY_ACCEL
 from amr_aerotwin.physics.dynamics import VehicleState
+from amr_aerotwin.physics.kinematics import corner_windows
 
 CRR = 0.012
 MIN_LIMIT_LAT_G = 2.0
@@ -65,9 +66,9 @@ def corner_limit_points(
     s = state.distance_m
     lap = state.lap
     rows = []
-    for c_idx, c_s in enumerate(corner_distance_m):
-        d = (s - c_s + lap.lap_length_m / 2) % lap.lap_length_m - lap.lap_length_m / 2
-        win = np.abs(d) <= window_m
+    # Disjoint windows: adjacent corners must not pick the same grid point as their limit point
+    windows = corner_windows(s, np.asarray(corner_distance_m, dtype=float), lap.lap_length_m, window_m)
+    for c_idx, win in enumerate(windows):
         if win.sum() < 5:
             continue
         flat_out = lap.throttle_pct[win].min() >= 97.0 and lap.brake[win].max() < 0.5

@@ -17,6 +17,7 @@ from numpy.typing import NDArray
 
 from amr_aerotwin.domain import AlignedLap
 from amr_aerotwin.physics.dynamics import corner_speed_class
+from amr_aerotwin.physics.kinematics import nearest_corner
 
 ENTRY_M = (-120.0, -20.0)
 APEX_M = (-20.0, 20.0)
@@ -26,7 +27,7 @@ EXIT_M = (20.0, 120.0)
 @dataclass(frozen=True)
 class LapComparison:
     distance_m: NDArray[np.float64]
-    delta_s: NDArray[np.float64]  # cumulative time delta (target - reference), + = target slower
+    delta_s: NDArray[np.float64]  # time gap at each grid point (target - reference), + = target slower
     corner_table: pd.DataFrame
     class_summary: pd.DataFrame
     straight_loss_s: float
@@ -39,6 +40,11 @@ def segment_time_loss(target: AlignedLap, reference: AlignedLap) -> NDArray[np.f
     cell = np.diff(gap)
     cell[0] += gap[0]
     return cell
+
+
+def cumulative_gap(cell: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Time gap at each grid point from per-cell losses (cell i runs from point i to point i + 1)."""
+    return np.concatenate([[0.0], np.cumsum(cell)[:-1]])
 
 
 def reference_cell_time(reference: AlignedLap) -> NDArray[np.float64]:
@@ -60,17 +66,23 @@ def compare_laps(
     length = target.lap_length_m
     cell = segment_time_loss(target, reference)
     ref_cell = reference_cell_time(reference)
+    pairs = sorted(zip(corner_distance_m, corner_labels))
+    c_sorted = np.array([c for c, _ in pairs], dtype=float)
+    # Every cell belongs to its nearest corner: two corners closer than 240 m split the track
+    # between them at the midpoint, so neither loses its braking or apex to the other
+    nearest, dn = nearest_corner(s, c_sorted, length)
+    in_window = (dn >= ENTRY_M[0]) & (dn < EXIT_M[1])
     assigned = np.zeros(len(s), dtype=bool)
     rows = []
-    for c_s, label in sorted(zip(corner_distance_m, corner_labels)):
-        d = (s - c_s + length / 2) % length - length / 2
+    for k, (c_s, label) in enumerate(pairs):
+        mine = in_window & (nearest == k)
         masks = {
-            "entry": (d >= ENTRY_M[0]) & (d < ENTRY_M[1]),
-            "apex": (d >= APEX_M[0]) & (d < APEX_M[1]),
-            "exit": (d >= EXIT_M[0]) & (d < EXIT_M[1]),
+            "entry": mine & (dn < ENTRY_M[1]),
+            "apex": mine & (dn >= APEX_M[0]) & (dn < APEX_M[1]),
+            "exit": mine & (dn >= EXIT_M[0]),
         }
         row: dict[str, Any] = {"corner": label, "distance_m": float(c_s)}
-        window = np.abs(d) <= 60.0
+        window = (nearest == k) & (np.abs(dn) <= 60.0)
         v_t_min = float(np.min(target.speed_ms[window]) * 3.6)
         v_r_min = float(np.min(reference.speed_ms[window]) * 3.6)
         row.update(
@@ -81,7 +93,6 @@ def compare_laps(
         )
         ref_t = 0.0
         for phase, m in masks.items():
-            m = m & ~assigned  # corners closer than 240 m share no cells
             row[f"{phase}_s"] = float(cell[m].sum())
             ref_t += float(ref_cell[m].sum())
             assigned |= m
@@ -106,7 +117,7 @@ def compare_laps(
     summary["loss_rate_pct"] = 100 * summary["time_s"] / summary["reference_time_s"].replace(0, np.nan)
     return LapComparison(
         distance_m=s,
-        delta_s=np.cumsum(cell),
+        delta_s=cumulative_gap(cell),
         corner_table=table,
         class_summary=summary,
         straight_loss_s=straight,

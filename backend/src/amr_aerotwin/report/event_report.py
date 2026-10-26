@@ -20,10 +20,10 @@ import pandas as pd
 
 from amr_aerotwin.data.repository import TelemetryRepository
 from amr_aerotwin.domain import TARGET_TEAM, AlignedLap
-from amr_aerotwin.modeling.lap_compare import compare_laps, segment_time_loss
+from amr_aerotwin.modeling.lap_compare import compare_laps, cumulative_gap, segment_time_loss
 from amr_aerotwin.modeling.validation import check_lap
 from amr_aerotwin.physics.dynamics import VehicleState, estimate_vehicle_state, lap_curvature
-from amr_aerotwin.physics.kinematics import consensus_curvature, gps_spline_kinematics
+from amr_aerotwin.physics.kinematics import consensus_curvature, corner_windows, gps_spline_kinematics
 from amr_aerotwin.physics.vehicle_params import straight_segments
 from amr_aerotwin.pipeline.event import _load_quali_laps, _r
 from amr_aerotwin.pipeline.season import PROCESSED_DIR, UPGRADES_CSV, load_tables
@@ -65,11 +65,9 @@ def corner_min_speeds(state: VehicleState, corner_s: np.ndarray) -> list[dict[st
     is independent of the car-data stream. See `flag_corner_speeds` for the check.
     """
     lap = state.lap
-    length = lap.lap_length_m
     out = []
-    for cs in corner_s:
-        d = (lap.distance_m - cs + length / 2) % length - length / 2
-        win = np.abs(d) <= CORNER_WINDOW_M
+    # Disjoint windows: two corners closer than 120 m (Vale, T16-T17) do not share a minimum
+    for win in corner_windows(lap.distance_m, corner_s, lap.lap_length_m, CORNER_WINDOW_M):
         v_wheel = float(np.min(state.speed_smooth_ms[win]) * 3.6)
         if len(lap.gps_time_s) > 50:
             _, v_gps = gps_spline_kinematics(lap.gps_time_s, lap.gps_x_m, lap.gps_y_m, lap.meta.lap_time_s, lap.time_s[win])
@@ -123,7 +121,11 @@ def season_block(
     best = _team_best(ev["team_table"])
     pole_drv = ev["pole"]["driver"]
     pole_team = ev["pole"]["team"]
-    pole_time = float(ev["official_pole"]["lap_time_s"])
+    # Gaps are to the fastest lap of the session, which is the Q3 pole at every event bar one
+    # (2025 Hungary: a Q2 lap); `pole.is_pole` says which it is
+    fl = ev.get("fastest_lap") or ev["official_pole"]
+    pole_time = float(fl["lap_time_s"])
+    is_pole = bool(ev.get("official_pole") and fl["driver"] == ev["official_pole"]["driver"] and fl.get("segment", "Q3") == "Q3")
     # Same curvature as the event build: consensus over every lap that passed the checks
     kappa = consensus_curvature([lap_curvature(lp, ev["gps_smoothing_lam"]) for lp in laps.values() if check_lap(lp).passed])
     states = {t: estimate_vehicle_state(laps[d], curvature_inv_m=kappa) for t, d in best.items()}
@@ -150,7 +152,9 @@ def season_block(
         r["telemetry_driver"] = best.get(r["team"])
     pos = {r["team"]: r["position"] for r in order}
     tgt_pos = pos.get(target)
-    rival = next((r["team"] for r in order if r["position"] == tgt_pos - 1), None) if tgt_pos and tgt_pos > 1 else None
+    # The team directly ahead that has a lap with usable telemetry (its trace is drawn)
+    ahead = [r["team"] for r in order if tgt_pos and r["position"] < tgt_pos and r["team"] in best]
+    rival = ahead[-1] if ahead else None
 
     # Sections and corners: each team's best lap against the pole lap
     sections, corner_time = {}, {}
@@ -197,7 +201,7 @@ def season_block(
         st = states[team]
         return {"team": team, "driver": best[team], "speed_kmh": st.speed_smooth_ms[::TRACE_STEP] * 3.6,
                 "throttle": lap.throttle_pct[::TRACE_STEP], "brake": lap.brake[::TRACE_STEP],
-                "delta_s": np.cumsum(segment_time_loss(lap, pole_lap))[::TRACE_STEP] if best[team] != pole_drv else np.zeros(len(lap.distance_m))[::TRACE_STEP]}
+                "delta_s": cumulative_gap(segment_time_loss(lap, pole_lap))[::TRACE_STEP] if best[team] != pole_drv else np.zeros(len(lap.distance_m))[::TRACE_STEP]}
 
     traces = {"distance_m": pole_lap.distance_m[::TRACE_STEP], "pole": trace(pole_team)}
     if target in best:
@@ -242,7 +246,7 @@ def season_block(
     return {
         "season": year, "round": ev["round"], "date": ev["date"], "circuit": circuit,
         "lap_length_m": ev["lap_length_m"], "regulations": ev["regulations"], "track": ev["track"],
-        "pole": {"driver": ev["official_pole"]["driver"], "team": ev["official_pole"]["team"], "lap_time_s": pole_time},
+        "pole": {"driver": fl["driver"], "team": fl["team"], "lap_time_s": pole_time, "is_pole": is_pole, "segment": fl.get("segment")},
         "reference_driver": pole_drv, "n_laps": ev["n_laps"], "n_passed": ev["n_passed"], "warnings": ev["warnings"],
         "order": order, "target_position": tgt_pos, "n_teams": len(order), "rival": rival,
         "sections": sections, "section_rates": rates, "reference_section_time_s": ref_time,

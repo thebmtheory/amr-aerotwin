@@ -225,6 +225,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
       <h2>The straights</h2>
       <div class="prose"><p id="t-straights"></p></div>
       <div class="grid2" id="straight-figs"></div>
+      <div class="legend" id="lg-straights"></div>
       <figure class="fig" style="margin-top:20px">
         <figcaption><strong>Speed lost at full throttle</strong><span>Largest drop below the car's own peak speed while the throttle stays above 98%, km/h. Drag or gradient alone can only stop a car accelerating; speed falling at full throttle means drive power fell.</span></figcaption>
         <div class="chart short" id="ch-ftloss" role="img" aria-label="Speed lost at full throttle on each straight"></div>
@@ -325,8 +326,15 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
   function S(y) { return R.seasons[y || state.season]; }
   function row(y, team) { return S(y).order.filter(function (r) { return r.team === team; })[0]; }
   function cname(c) { return c.label + (c.name ? " " + c.name : ""); }
+  // The reference is the fastest lap of qualifying: the pole lap, except where that came before Q3
+  function poleWord(y) { var p = S(y).pole; return p.is_pole === false ? "fastest lap of qualifying (" + (p.segment || "before Q3") + ")" : "pole"; }
   var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   function day(iso) { var p = String(iso || "").split("-"); return p.length === 3 ? +p[2] + " " + MONTHS[+p[1] - 1] + " " + p[0] : iso; }
+  function lossRank(rank, n) {  // rank 1 = the largest loss of n cars
+    if (rank === 1) return "the most of any car";
+    if (rank === n) return "the least of any car";
+    return rank <= n / 2 ? ord(rank) + "-largest of " + n : ord(n - rank + 1) + "-smallest of " + n;
+  }
   function rankPhrase(r) {  // r.i = 1 for the largest gap
     var best = r.n - r.i + 1;
     return r.i <= r.n / 2 ? (r.i === 1 ? "worst" : ord(r.i) + "-worst") : (best === 1 ? "best" : ord(best) + "-best");
@@ -376,7 +384,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     var y0 = YEARS[0], s0 = S(y0), me0 = row(y0, T);
     var rp = s.race_pace && s.race_pace.team_pace ? s.race_pace.team_pace.filter(function (r) { return r.team === T; })[0] : null;
     var rpPos = rp ? s.race_pace.team_pace.slice().sort(function (a, b) { return a.gap_s - b.gap_s; }).map(function (r) { return r.team; }).indexOf(T) + 1 : null;
-    $("lede").textContent = me.driver + "'s best lap was " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) slower than " + s.pole.driver + "'s pole for " + s.pole.team +
+    $("lede").textContent = me.driver + "'s best lap was " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) slower than " + s.pole.driver + "'s " + poleWord(y) + " for " + s.pole.team +
       (rv ? " and " + f(gapRival, 3) + " s slower than " + rv.driver + "'s " + s.rival + ". Against " + s.rival + " it lost " + f(d.straights, 2) + " s on the straights, " +
         f(d.high, 2) + " s in high-speed corners, " + f(d.medium, 2) + " s in medium and " + f(d.low, 2) + " s in low-speed corners." : ".") +
       " A year earlier the car was " + ord(s0.target_position) + " of " + s0.n_teams + ", " + f(me0.gap_pct, 2) + "% off pole.";
@@ -409,7 +417,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     $("t-qualifying").innerHTML = (function () {
       var me = row(null, T), mate = me.teammate;
       return "Aston Martin qualified <strong>" + ord(s.target_position) + " of " + s.n_teams + " teams</strong>, " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) behind " + esc(s.pole.driver) +
-        " (" + esc(s.pole.team) + ")." + (mate ? " " + esc(mate) + " was " + f(me.teammate_time_s - me.lap_time_s, 3) + " s slower than " + esc(me.driver) + "." : "") +
+        " (" + esc(s.pole.team) + ", " + poleWord() + ")." + (mate ? " " + esc(mate) + " was " + f(me.teammate_time_s - me.lap_time_s, 3) + " s slower than " + esc(me.driver) + "." : "") +
         (s.rival ? " The team directly ahead was " + esc(s.rival) + ", " + f(me.lap_time_s - row(null, s.rival).lap_time_s, 3) + " s faster." : "");
     })();
     plot("ch-order", [
@@ -536,7 +544,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
       xaxis: { visible: false, scaleanchor: "y", scaleratio: 1 }, yaxis: { visible: false } }));
 
     var nGain = L.filter(function (v) { return v < 0; }).length / L.length;
-    $("t-lap").innerHTML = esc(tr.target.driver) + "'s lap against " + esc(tr.pole.driver) + "'s pole" + (rv ? " and " + esc(rv.driver) + "'s " + esc(rv.team) : "") +
+    $("t-lap").innerHTML = esc(tr.target.driver) + "'s lap against " + esc(tr.pole.driver) + "'s " + poleWord() + (rv ? " and " + esc(rv.driver) + "'s " + esc(rv.team) : "") +
       ". Where the bottom panel rises the car is losing time; Aston Martin was gaining on the pole lap over " + f(100 * nGain, 0) + "% of the track." +
       (flagged.length ? " <span class=\"flag\">Shaded:</span> " + esc(tr.target.driver) + "'s speed channel at " + flagged.map(cname).join(", ") +
         " holds a constant value at full throttle while GPS shows the car accelerating, so that dip is a data fault, not a lift; its time loss still comes from the timing channel and is unaffected." : "");
@@ -602,6 +610,9 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
           opacity: k === T || k === s.rival ? 1 : 0.85, hovertemplate: esc(k) + " %{y:.0f} km/h · %{x:.0f} m<extra></extra>" };
       }), layout(t, { margin: { l: 52, r: 16, t: 8, b: 44 }, hovermode: "closest", xaxis: { title: { text: "distance from the timing line, m" } }, yaxis: { title: { text: "km/h" } } }));
     });
+    $("lg-straights").innerHTML = '<span><i style="background:' + t.amr + '"></i>Aston Martin</span>' +
+      (s.rival ? '<span><i style="background:' + t.rival + '"></i>' + esc(s.rival) + " (team directly ahead)</span>" : "") +
+      '<span><i style="background:' + t.field + '"></i>other teams</span>';
     var teams = s.order.map(function (r) { return r.team; }).filter(function (k) { return s.straights.length && s.straights[0].teams[k]; });
     var pal = [t.ink2, t.muted];
     plot("ch-ftloss", s.straights.map(function (st, i) {
@@ -617,7 +628,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
       var rank = others.filter(function (k) { return st.teams[k].full_throttle_loss_kmh > me.full_throttle_loss_kmh; }).length + 1;
       return "On the <strong>" + esc(st.name) + "</strong> Aston Martin arrived " + cmp(me.entry_kmh - med("entry_kmh"), "faster", "slower") + " than the field median, peaked " +
         cmp(me.peak_kmh - med("peak_kmh"), "higher", "lower") + " and finished " + cmp(me.end_kmh - med("end_kmh"), "higher", "lower") + "; at full throttle it fell " + f(me.full_throttle_loss_kmh, 1) +
-        " km/h below its own peak (" + (rank === 1 ? "the most of any car" : ord(rank) + " most") + "; field median " + f(med("full_throttle_loss_kmh"), 1) + " km/h).";
+        " km/h below its own peak (" + lossRank(rank, others.length + 1) + "; field median " + f(med("full_throttle_loss_kmh"), 1) + " km/h).";
     });
     var anyClip = s.straights.some(function (st) { return Object.keys(st.teams).some(function (k) { return st.teams[k].full_throttle_loss_kmh > 8; }); });
     $("t-straights").innerHTML = parts.join(" ") + (anyClip ?
@@ -742,7 +753,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
 
   function renderSeason() {
     var t = theme();
-    $("season-note").textContent = "Pole: " + S().pole.driver + " (" + S().pole.team + "), " + f(S().pole.lap_time_s, 3) + " s · " + S().regulations.mass_kg + " kg model mass (minimum plus qualifying fuel) · " + (S().regulations.has_drs ? "DRS" : "no DRS");
+    $("season-note").textContent = (S().pole.is_pole === false ? "Fastest lap: " : "Pole: ") + S().pole.driver + " (" + S().pole.team + "), " + f(S().pole.lap_time_s, 3) + " s · " + S().regulations.mass_kg + " kg model mass (minimum plus qualifying fuel) · " + (S().regulations.has_drs ? "DRS" : "no DRS");
     renderOrder(t); renderSections(t); renderTrace(t); renderCorners(t); renderStraights(t); renderGrip(t); renderRace(t);
   }
   function renderAll() { hero(); renderSeason(); renderContext(theme()); renderNotes(); syncBar(); }

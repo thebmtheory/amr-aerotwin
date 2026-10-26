@@ -40,6 +40,8 @@ from scipy.optimize import least_squares
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import GroupKFold
 
+from amr_aerotwin.modeling.intervals import boot_ci
+
 NUMERIC_FEATURES = [
     "radius_m", "turn_angle_deg", "approach_m", "rho_kg_m3",
     "track_temp_c", "tyre_life", "season_2026",
@@ -198,7 +200,7 @@ def team_corner_deficit(oof: pd.DataFrame, n_boot: int = 400, seed: int = 4) -> 
         boots = [by_ev.reindex(rng.choice(events, len(events))).dropna().mean() for _ in range(n_boot)]
         rows.append({
             "team": team, "speed_class": cls, "deficit_kmh": float(by_ev.mean()),
-            "ci_lo": float(np.nanpercentile(boots, 5)), "ci_hi": float(np.nanpercentile(boots, 95)),
+            "ci_lo": boot_ci(boots, len(events))[0], "ci_hi": boot_ci(boots, len(events))[1],
             "n_events": int(by_ev.size),
         })
     return pd.DataFrame(rows)

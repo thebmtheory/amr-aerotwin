@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from amr_aerotwin.domain import AlignedLap, AmbientState, LapMeta
 from amr_aerotwin.modeling.energy import lap_energy_summary, straight_energy_metrics
-from amr_aerotwin.modeling.lap_compare import compare_laps, segment_time_loss
+from amr_aerotwin.modeling.lap_compare import compare_laps, reference_cell_time, segment_time_loss
 from amr_aerotwin.modeling.pod import PODReducedOrderModel
 from amr_aerotwin.modeling.race_pace import clean_race_laps, fit_race_pace
 from amr_aerotwin.modeling.validation import check_lap, geometry_ok
@@ -37,7 +37,10 @@ def test_lap_comparison_phases_and_straights_sum_to_official_gap():
     assert segment_time_loss(tgt, ref).sum() == pytest.approx(official, abs=1e-9)
     total = cmp_.corner_table["total_s"].sum() + cmp_.straight_loss_s
     assert total == pytest.approx(official, abs=1e-9)
-    assert cmp_.delta_s[-1] == pytest.approx(official, abs=1e-9)
+    # The trace is the gap at each grid point (not one point ahead); the last cell closes it
+    assert np.allclose(cmp_.delta_s, tgt.time_s - ref.time_s, atol=1e-12)
+    assert cmp_.delta_s[-1] + segment_time_loss(tgt, ref)[-1] == pytest.approx(official, abs=1e-9)
+    assert cmp_.total_delta_s == pytest.approx(official, abs=1e-9)
     same = compare_laps(ref, ref, np.array([800.0]), ["T1"])
     assert same.total_delta_s == pytest.approx(0.0, abs=1e-12)
 
@@ -159,7 +162,7 @@ def test_race_pace_intervals_cover(phi, offset_sd):
         laps = _correlated_race(seed, phi=phi, offset_sd=offset_sd)
         lo, hi = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"]))).fuel_ci90
         hits += lo <= -0.06 <= hi
-    assert hits / n >= 0.75  # nominal 90%; cluster bootstrap with 16 clusters
+    assert hits / n >= 0.85  # nominal 90%; 0.93 over 60 seeds for both error models
 
 
 AMB_STD = AmbientState(15.0, 30.0, 1013.25 * 1.2 / 1.225, 0.0, 0.0, 0.0)
@@ -290,4 +293,20 @@ def test_race_pace_team_gap_intervals_cover():
             truth = 0.2 * int(team[1:])
             hits += row["ci_lo"] <= truth <= row["ci_hi"]
             total += 1
-    assert hits / total >= 0.75
+    assert 0.85 <= hits / total <= 0.99  # nominal 90%: neither too narrow nor uselessly wide
+
+
+def test_close_corners_split_the_track_instead_of_one_taking_it():
+    """Two corners 90 m apart (a chicane) each keep braking, apex and exit time; nothing is counted twice."""
+    base = 60 + 20 * np.sin(np.linspace(0, 6 * np.pi, 1000))
+    ref = _lap(base)
+    tgt = _lap(base * 0.99)
+    cmp_ = compare_laps(tgt, ref, np.array([2000.0, 2090.0]), ["T1", "T2"])
+    t = cmp_.corner_table.set_index("corner")
+    for c in ("T1", "T2"):
+        assert t.loc[c, "apex_s"] > 0 and t.loc[c, "entry_s"] > 0 and t.loc[c, "exit_s"] > 0
+    total = cmp_.corner_table["total_s"].sum() + cmp_.straight_loss_s
+    assert total == pytest.approx(cmp_.total_delta_s, abs=1e-12)
+    # Together they cover exactly the union of their windows (120 m before T1 to 120 m after T2)
+    assert t["reference_time_s"].sum() == pytest.approx(
+        float(np.sum(reference_cell_time(ref)[(ref.distance_m >= 1880.0) & (ref.distance_m < 2210.0)])), rel=1e-9)

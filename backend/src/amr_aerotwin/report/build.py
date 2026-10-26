@@ -22,7 +22,7 @@ EVENT_KEYS = [
     "season", "event", "round", "date", "circuit", "lap_length_m", "turning_number", "geometry_ok",
     "pole", "track", "corners", "map", "comparison", "lapsim", "iso_lap_time", "sandbox", "pod",
     "energy", "energy_speed", "race_pace", "warnings", "n_laps", "n_passed", "gps_smoothing_lam",
-    "distance_scale", "team_table",
+    "distance_scale", "team_table", "official_pole", "fastest_lap", "wet_session",
 ]
 
 

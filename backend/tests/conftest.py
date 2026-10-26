@@ -47,12 +47,15 @@ def circle_lap_telemetry(
     gps_noise_m: float = 0.0,
     odometer_scale: float = 1.0,
     speed_ripple_ms: float = 0.0,
+    clock_offset_s: float = 0.0,
     seed: int = 0,
 ) -> tuple[dict, float]:
     """Raw-archive-format telemetry for one lap of a circle at constant speed.
 
     Positions are whole decimetres at GPS fixes and linearly interpolated in between, as in
     the TracingInsights archive. `gps_lag_s` delays the GPS stream relative to car data.
+    `clock_offset_s` shifts the lap's time origin for both streams, as the archive does: the
+    car crossed the line that long before telemetry time 0 (the odometer still starts at 0).
     Returns (raw dict, lap time).
     """
     rng = np.random.default_rng(seed)
@@ -66,7 +69,7 @@ def circle_lap_telemetry(
     lap_time = float(np.interp(circumference, dist(fine), fine))
     t = np.arange(0.0, lap_time, 1.0 / hz)
     t_fix = np.arange(0.0, lap_time + 1.0, 1.0 / gps_hz)
-    th_fix = dist(t_fix - gps_lag_s) / radius_m
+    th_fix = dist(t_fix - gps_lag_s + clock_offset_s) / radius_m
     x_fix = np.round((radius_m * np.sin(th_fix) + rng.normal(0, gps_noise_m, len(t_fix))) * 10.0)
     y_fix = np.round((radius_m * (1 - np.cos(th_fix)) + rng.normal(0, gps_noise_m, len(t_fix))) * 10.0)
     tt = np.sort(np.concatenate([t, t_fix[t_fix < lap_time]]))
@@ -78,10 +81,10 @@ def circle_lap_telemetry(
     x = np.where(is_fix, x, x + 0.37)
     y = np.where(is_fix, y, y + 0.37)
     n = len(tt)
-    v_t = speed_ms + speed_ripple_ms * np.sin(2 * np.pi * tt / period)
+    v_t = speed_ms + speed_ripple_ms * np.sin(2 * np.pi * (tt + clock_offset_s) / period)
     raw = {
         "time": tt.tolist(),
-        "distance": (dist(tt) * odometer_scale).tolist(),
+        "distance": ((dist(tt + clock_offset_s) - dist(clock_offset_s)) * odometer_scale).tolist(),
         "speed": (v_t * 3.6 * odometer_scale).tolist(),
         "throttle": np.full(n, 100.0).tolist(),
         "brake": np.zeros(n).tolist(),

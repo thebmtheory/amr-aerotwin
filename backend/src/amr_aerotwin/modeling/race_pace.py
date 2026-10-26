@@ -40,6 +40,9 @@ class RacePaceResult:
     team_pace: pd.DataFrame  # team, pace_s, gap_s, ci_lo, ci_hi (gap to fastest team)
     n_laps: int
     residual_sd_s: float
+    # Drivers with one stint: it is never left out (that would drop the driver), so their stint
+    # offset is not in their interval, and intervals involving them are too narrow
+    single_stint_drivers: tuple[str, ...] = ()
 
 
 def clean_race_laps(laps: pd.DataFrame) -> pd.DataFrame:
@@ -174,6 +177,7 @@ def fit_race_pace(
     ).sort_values("gap_s").reset_index(drop=True)
 
     comps = sorted(used["compound"].unique())
+    n_stints = used.groupby("drv")["stint_key"].nunique()
     return RacePaceResult(
         fuel_s_per_lap=float(coef["beta"]),
         fuel_ci90=ci("beta"),
@@ -184,4 +188,5 @@ def fit_race_pace(
         team_pace=tp,
         n_laps=len(used),
         residual_sd_s=resid_sd,
+        single_stint_drivers=tuple(sorted(n_stints[n_stints < 2].index)),
     )

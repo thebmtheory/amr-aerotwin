@@ -256,28 +256,40 @@ def align_lap(
     length = ref.length_m
     f = raw.is_gps_fix
     tau, lag_rms = estimate_gps_lag_s(raw, meta.lap_time_s)
+    t_end = meta.lap_time_s
     if int(f.sum()) >= MIN_FIXES:
         t_fix = raw.time_s[f] + tau
         s_fix, offset = project_onto_reference(raw.x_m[f], raw.y_m[f], ref)
         s_fix = unwrap_lap_distance(s_fix, length)
         corr = _smooth_offset(s_fix - _odometer_at(t_fix, raw))
-        # Pin both ends to the timing line: s(0) = 0 and s(T) = L. The pre-correction gaps
-        # are a genuine GPS-vs-timing consistency check, reported in `quality`.
-        t_end = meta.lap_time_s
+        s_raw = raw.distance_m + np.interp(raw.time_s, t_fix, corr)
+        s_raw = np.maximum.accumulate(s_raw)
+        # Where the car is, by GPS, at the lap's first and last timestamps, relative to the timing
+        # line (reported in `quality`). In this archive the gaps are mostly an offset of the lap's
+        # clock: GPS and car data move together, the start and end gaps agree, and official sector
+        # times are matched when the lap is re-timed. So positions are left alone and time is
+        # mapped affinely so that the car is at the line at 0 and again at the official lap time.
         od_ends = _odometer_at(np.array([0.0, t_end]), raw)
         corr_ends = np.interp([0.0, t_end], t_fix, corr)
         start_gap = float(od_ends[0] + corr_ends[0])
         end_gap = float(od_ends[1] + corr_ends[1] - length)
-        ramp = start_gap + (end_gap - start_gap) * (t_fix / t_end)
-        corr = corr - ramp
-        s_raw = raw.distance_m + np.interp(raw.time_s, t_fix, corr)
-        s_raw = np.maximum.accumulate(s_raw)
         sx, sy = gps_position_splines(t_fix, raw.x_m[f], raw.y_m[f], meta.lap_time_s, GPS_LAM)
     else:
         s_raw, offset = project_onto_reference(raw.x_m, raw.y_m, ref)
         s_raw = unwrap_lap_distance(s_raw, length)
         t_fix, s_fix, sx, sy = raw.time_s, s_raw, None, None
         start_gap = end_gap = float("nan")
+
+    # Telemetry times at which the car crosses the line (extrapolated at the speed there)
+    v_ends = np.maximum(np.interp([0.0, t_end], raw.time_s, raw.speed_ms), 1.0)
+    t0 = -start_gap / v_ends[0] if np.isfinite(start_gap) else 0.0
+    t1 = t_end - end_gap / v_ends[1] if np.isfinite(end_gap) else t_end
+    if not t1 - t0 > 0.5 * t_end:
+        raise ValueError(f"Line crossings inconsistent for {meta.lap_id}")
+    rate = t_end / (t1 - t0)
+
+    def retime(t: NDArray[np.float64]) -> NDArray[np.float64]:
+        return (np.asarray(t, dtype=float) - t0) * rate
 
     inside = (s_raw > 0.0) & (s_raw < length)
     inside &= np.concatenate([[True], np.diff(s_raw) > 1e-6])
@@ -286,9 +298,9 @@ def align_lap(
         raise ValueError(f"Too few usable samples after projection for {meta.lap_id}")
 
     grid = ref.distance_m
-    # Time: measured channel, anchored to 0 at the line and to the official lap time at the end.
+    # Time: measured channel, re-timed so the car is at the line at 0 and the official lap time.
     s_t = np.concatenate([[0.0], s_in, [length]])
-    t_t = np.concatenate([[0.0], raw.time_s[inside], [meta.lap_time_s]])
+    t_t = np.concatenate([[0.0], retime(raw.time_s[inside]), [meta.lap_time_s]])
     mono = np.concatenate([[True], np.diff(t_t) > 0]) & np.concatenate([[True], np.diff(s_t) > 0])
     time_s = PchipInterpolator(s_t[mono], t_t[mono])(grid)
 
@@ -300,12 +312,13 @@ def align_lap(
         return np.interp(grid, s_in, ch[inside])
 
     if sx is not None:
-        x_grid, y_grid = sx(time_s), sy(time_s)
+        t_tel = t0 + time_s / rate  # back to the telemetry clock the GPS splines were built on
+        x_grid, y_grid = sx(t_tel), sy(t_tel)
     else:
         x_grid, y_grid = lin(raw.x_m), lin(raw.y_m)
 
     # Genuine data-quality checks (each can fail; thresholds live in modeling/validation.py)
-    t_in = raw.time_s[inside]
+    t_in = retime(raw.time_s[inside])
     pred_end = t_in[-1] + (length - s_in[-1]) / max(v_in[-1], 1.0)
     inv_v = 1.0 / np.maximum(v_in, 1.0)
     integral = float(np.sum(0.5 * (inv_v[1:] + inv_v[:-1]) * np.diff(s_in)))
@@ -320,6 +333,7 @@ def align_lap(
         "time_closure_ms": float((pred_end - meta.lap_time_s) * 1000.0),
         "start_line_gap_m": start_gap,
         "finish_line_gap_m": end_gap,
+        "line_gap_mismatch_m": start_gap - end_gap,
         "speed_time_consistency_pct": float((integral - measured) / measured * 100.0),
         "speed_trap_minus_max_kmh": float(meta.speed_trap_kmh - np.max(v_in) * 3.6),
         "frozen_run_m": longest_frozen_run_m(raw, inside, s_raw),
@@ -343,7 +357,7 @@ def align_lap(
         gap_ahead_m=np.interp(grid, s_in, np.nan_to_num(raw.gap_ahead_m[inside], posinf=1e6)),
         lap_length_m=length,
         distance_scale=ref.scale,
-        gps_time_s=t_fix if sx is not None else np.zeros(0),
+        gps_time_s=retime(t_fix) if sx is not None else np.zeros(0),  # same clock as time_s
         gps_distance_m=s_fix if sx is not None else np.zeros(0),
         gps_x_m=raw.x_m[f] if sx is not None else np.zeros(0),
         gps_y_m=raw.y_m[f] if sx is not None else np.zeros(0),

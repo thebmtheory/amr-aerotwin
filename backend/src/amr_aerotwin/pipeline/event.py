@@ -34,7 +34,13 @@ from amr_aerotwin.modeling.lap_compare import compare_laps
 from amr_aerotwin.modeling.pod import PODReducedOrderModel
 from amr_aerotwin.modeling.powertrain import event_power_drag_rows, wind_rotation_test
 from amr_aerotwin.modeling.race_pace import fit_race_pace
-from amr_aerotwin.modeling.validation import car_data_stall_kmh, check_lap, expected_turn_count, geometry_ok
+from amr_aerotwin.modeling.validation import (
+    car_data_stall_kmh,
+    check_lap,
+    expected_turn_count,
+    geometry_ok,
+    sector_time_errors_s,
+)
 from amr_aerotwin.physics.dynamics import (
     HIGH_SPEED_CORNER,
     STRAIGHT,
@@ -43,7 +49,7 @@ from amr_aerotwin.physics.dynamics import (
     estimate_vehicle_state,
     lap_curvature,
 )
-from amr_aerotwin.physics.kinematics import consensus_curvature, select_gps_smoothing, turning_number
+from amr_aerotwin.physics.kinematics import consensus_curvature, corner_windows, select_gps_smoothing, turning_number
 from amr_aerotwin.physics.lapsim import VehicleParams, iso_lap_time_grid, lap_time_sensitivities
 from amr_aerotwin.physics.vehicle_params import (
     corner_limit_points,
@@ -115,6 +121,22 @@ def _sector(r: pd.Series, col: str) -> float:
     return float(r[col]) if pd.notna(r[col]) else float("nan")
 
 
+def _align_all(raws: dict[str, tuple[Any, LapMeta, Any]], ref: Any, warnings: list[str]) -> dict[str, AlignedLap]:
+    """Align every lap to `ref`, then add the checks that need the whole field."""
+    out: dict[str, AlignedLap] = {}
+    for drv, (raw, meta, amb) in raws.items():
+        try:
+            out[drv] = align_lap(raw, meta, amb, ref)
+        except ValueError as err:
+            warnings.append(f"{drv}: {err}")
+    # Car-data stalls and sector-line positions can only be judged against the rest of the field
+    for drv, v in car_data_stall_kmh(out).items():
+        out[drv].quality["car_data_stall_kmh"] = v
+    for drv, v in sector_time_errors_s(out).items():
+        out[drv].quality["sector_time_error_s"] = v
+    return out
+
+
 def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[dict[str, AlignedLap], Any, pd.DataFrame, list[str]]:
     laps = repo.session_laps(year, event, QUALI)
     amb = repo.session_ambient(year, event, QUALI)
@@ -125,39 +147,55 @@ def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[
         colors = {}
     valid = laps[laps["time"].notna() & ~laps["del"]]
     warnings: list[str] = []
-    pole_row = None
-    for _, row in valid.sort_values("time").iterrows():  # pole lap with usable telemetry
-        try:
-            raw = parse_raw_lap(repo.lap_telemetry(year, event, QUALI, row["drv"], int(row["lap"])))
-            pole_row, ref = row, build_reference_line(raw, float(row["time"]))
-            break
-        except (DataUnavailableError, ValueError) as err:
-            warnings.append(f"reference candidate {row['drv']} unusable: {err}")
-    if pole_row is None:
-        raise DataUnavailableError(f"No usable qualifying telemetry for {year} {event}")
-
-    out: dict[str, AlignedLap] = {}
+    raws: dict[str, tuple[Any, LapMeta, Any]] = {}
     for drv in sorted(valid["drv"].unique()):
         r = fastest_valid_lap(laps, drv)
         if r is None:
             continue
         try:
             raw = parse_raw_lap(repo.lap_telemetry(year, event, QUALI, drv, int(r["lap"])))
-            meta = LapMeta(
-                season=year, event=event, session=QUALI, driver=drv, team=str(r["team"]),
-                lap_number=int(r["lap"]), lap_time_s=float(r["time"]), compound=str(r["compound"]),
-                tyre_life_laps=int(r["life"]) if pd.notna(r["life"]) else 1,
-                sector_times_s=(_sector(r, "s1"), _sector(r, "s2"), _sector(r, "s3")),
-                speed_trap_kmh=float(r["vst"]) if pd.notna(r["vst"]) else np.nan,
-                team_color=colors.get(drv, "#777777"),
-            )
-            out[drv] = align_lap(raw, meta, lap_ambient(r, amb), ref)
         except (DataUnavailableError, ValueError) as err:
             warnings.append(f"{drv}: {err}")
-    # Car-data stalls can only be seen against the rest of the field at the same place
-    for drv, v in car_data_stall_kmh(out).items():
-        out[drv].quality["car_data_stall_kmh"] = v
-    return out, ref, laps, warnings
+            continue
+        meta = LapMeta(
+            season=year, event=event, session=QUALI, driver=drv, team=str(r["team"]),
+            lap_number=int(r["lap"]), lap_time_s=float(r["time"]), compound=str(r["compound"]),
+            tyre_life_laps=int(r["life"]) if pd.notna(r["life"]) else 1,
+            sector_times_s=(_sector(r, "s1"), _sector(r, "s2"), _sector(r, "s3")),
+            speed_trap_kmh=float(r["vst"]) if pd.notna(r["vst"]) else np.nan,
+            team_color=colors.get(drv, "#777777"),
+        )
+        raws[drv] = (raw, meta, lap_ambient(r, amb))
+    order = sorted(raws, key=lambda d: raws[d][1].lap_time_s)
+
+    # The reference line comes from the fastest lap whose telemetry builds one. That lap is not
+    # checked yet, and a broken one (frozen speed, a GPS lag at the search bound) skews the line
+    # length and every other lap's line gaps (2026 Monza: 2 of 22 laps passed). So all laps are
+    # aligned and checked, the reference is rebuilt from the fastest lap that passes, and the
+    # laps are aligned again.
+    ref, ref_drv = None, None
+    for d in order:
+        try:
+            ref, ref_drv = build_reference_line(raws[d][0], raws[d][1].lap_time_s), d
+            break
+        except ValueError as err:
+            warnings.append(f"reference candidate {d} unusable: {err}")
+    if ref is None:
+        raise DataUnavailableError(f"No usable qualifying telemetry for {year} {event}")
+    w1: list[str] = []
+    out = _align_all(raws, ref, w1)
+    passing = [d for d in order if d in out and check_lap(out[d]).passed]
+    if passing and passing[0] != ref_drv:
+        w2: list[str] = []
+        try:
+            ref2 = build_reference_line(raws[passing[0]][0], raws[passing[0]][1].lap_time_s)
+            out2 = _align_all(raws, ref2, w2)
+            if sum(check_lap(lp).passed for lp in out2.values()) >= len(passing):
+                ref, out, w1 = ref2, out2, w2
+                warnings.append(f"reference rebuilt from {passing[0]}: the fastest lap ({ref_drv}) fails the data checks")
+        except ValueError as err:
+            warnings.append(f"reference rebuild from {passing[0]} failed: {err}")
+    return out, ref, laps, warnings + w1
 
 
 def _export_trace(arr: np.ndarray, nd: int = 2) -> list:
@@ -242,7 +280,8 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         r = fastest_valid_lap(session_laps, drv)
         if r is not None:
             trows.append({"season": year, "round": round_no, "event": event, "driver": drv,
-                          "team": str(r["team"]), "lap_time_s": float(r["time"])})
+                          "team": str(r["team"]), "lap_time_s": float(r["time"]),
+                          "segment": str(r["qs"]) if "qs" in r and pd.notna(r["qs"]) else None})
     timing_rows = pd.DataFrame(trows)
 
     checks = {d: check_lap(lp) for d, lp in laps.items()}
@@ -271,6 +310,12 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     # telemetry is unusable; telemetry comparisons use `pole_drv`, the fastest clean lap.
     fastest = float(timing_rows["lap_time_s"].min()) if not timing_rows.empty else min(lp.meta.lap_time_s for lp in laps.values())
     official = timing_rows.loc[timing_rows["lap_time_s"].idxmin()] if not timing_rows.empty else None
+    # Pole is the fastest lap of Q3; the fastest lap of the session can come earlier (2025 Hungary: Q2)
+    q3 = session_laps[session_laps["time"].notna() & ~session_laps["del"] & (session_laps.get("qs") == "Q3")] if "qs" in session_laps else pd.DataFrame()
+    q3_pole = q3.loc[q3["time"].idxmin()] if len(q3) else None
+    wet_share = float(session_laps.loc[session_laps["time"].notna(), "compound"].isin(["WET", "INTERMEDIATE"]).mean()) if "compound" in session_laps else 0.0
+    if wet_share >= 0.5:
+        warns.append(f"wet session: {wet_share:.0%} of timed laps on intermediate or wet tyres; left out of the season analyses")
 
     # Corners on the reference line
     corners = repo.corners(year, event)
@@ -360,16 +405,14 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     length = ref.length_m
     prev = np.roll(c_s, 1)
     approach = (c_s - prev) % length
-    pole_min = {}
-    for i, cs in enumerate(c_s):
-        dd = (pole.distance_m - cs + length / 2) % length - length / 2
-        pole_min[i] = float(np.min(pole_state.speed_smooth_ms[np.abs(dd) <= 60]) * 3.6)
+    # Disjoint +-60 m windows (+-30 m for the radius): close corners split the track at the midpoint
+    wins = corner_windows(ref.distance_m, c_s, length, 60.0)
+    nears = corner_windows(ref.distance_m, c_s, length, 30.0)
+    pole_min = {i: float(np.min(pole_state.speed_smooth_ms[w]) * 3.6) for i, w in enumerate(wins)}
     for d, st in states.items():
         lp = st.lap
-        for i, cs in enumerate(c_s):
-            dd = (lp.distance_m - cs + length / 2) % length - length / 2
-            win = np.abs(dd) <= 60
-            near = np.abs(dd) <= 30
+        for i in range(len(c_s)):
+            win, near = wins[i], nears[i]
             if win.sum() < 5:
                 continue
             idx = np.flatnonzero(win)[np.argmin(st.speed_smooth_ms[win])]
@@ -395,8 +438,11 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         "turning_number": _r(tn, 4), "expected_turns": n_turns, "geometry_ok": geo_ok, "distance_scale": _r(ref.scale, 4),
         "pole": {"driver": pole_drv, "team": pole.meta.team, "lap_time_s": pole.meta.lap_time_s,
                  "is_official_pole": bool(official is None or official["driver"] == pole_drv)},
-        "official_pole": None if official is None else {"driver": str(official["driver"]), "team": str(official["team"]),
-                                                        "lap_time_s": float(official["lap_time_s"])},
+        "official_pole": None if q3_pole is None else {"driver": str(q3_pole["drv"]), "team": str(q3_pole["team"]),
+                                                       "lap_time_s": float(q3_pole["time"])},
+        "fastest_lap": None if official is None else {"driver": str(official["driver"]), "team": str(official["team"]),
+                                                      "lap_time_s": float(official["lap_time_s"]), "segment": official.get("segment")},
+        "wet_session": wet_share >= 0.5, "wet_share": _r(wet_share, 3),
         "track": {"high_speed_share": _r(high_share), "full_throttle_share": _r(full_throttle),
                   "straight_share": _r(straight_share), "q_low_pa": _r(q_low, 0), "q_high_pa": _r(q_high, 0),
                   "straight_peak_kmh": _r(straight_peak_kmh, 1)},
@@ -430,8 +476,8 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     srows = []
     for team in sorted(set(team_of.values())):
         drv_best = min((d for d in good if team_of[d] == team), key=lambda d: good[d].meta.lap_time_s)
-        if drv_best == pole_drv:
-            continue
+        # The pole team loses nothing to its own lap; its zero rows keep season rates (ratios of
+        # sums over events) from ignoring exactly the events a team was fastest at
         cs = compare_laps(good[drv_best], pole, c_s, c_lab).class_summary
         for r in cs.to_dict("records"):
             srows.append({"season": year, "round": round_no, "event": event, "team": team, "driver": drv_best,
@@ -503,6 +549,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
                 "reference_compound": rp.reference_compound, "n_laps": rp.n_laps,
                 "residual_sd_s": _r(rp.residual_sd_s, 3),
                 "team_pace": _r(rp.team_pace.to_dict("records"), 3),
+                "single_stint_drivers": list(rp.single_stint_drivers),
             }
         else:
             warns.append("race pace skipped (wet or insufficient green-flag slick running)")

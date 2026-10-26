@@ -89,9 +89,14 @@ def gps_position_splines(
     lap_time_s: float,
     lam: float = 0.2,
 ):  # -> tuple[BSpline, BSpline]
-    """Smoothing splines x(t), y(t) through raw GPS fixes, periodically extended by one lap."""
-    order = np.argsort(fix_time_s, kind="stable")
-    t, x, y = fix_time_s[order], fix_x_m[order], fix_y_m[order]
+    """Smoothing splines x(t), y(t) through raw GPS fixes, periodically extended by one lap.
+
+    Fix times are wrapped into one lap first: after a lap is re-timed to its line crossings a
+    few fixes fall just before 0 or after the lap time, and they belong to the neighbouring laps.
+    """
+    t_w = np.mod(np.asarray(fix_time_s, dtype=float), lap_time_s)
+    order = np.argsort(t_w, kind="stable")
+    t, x, y = t_w[order], fix_x_m[order], fix_y_m[order]
     keep = np.concatenate([[True], np.diff(t) > 1e-3])
     t, x, y = t[keep], x[keep], y[keep]
     t_ext = np.concatenate([t - lap_time_s, t, t + lap_time_s])
@@ -184,3 +189,27 @@ def decompose_aero_wind_vectors(
         "v_airspeed_ms": np.hypot(v_long, v_crosswind),
         "beta_aero_deg": np.degrees(np.arctan2(v_crosswind, v_long)),
     }
+
+
+def nearest_corner(distance_m: NDArray[np.float64], corner_distance_m: NDArray[np.float64],
+                   lap_length_m: float) -> tuple[NDArray[np.int64], NDArray[np.float64]]:
+    """For every grid point: index of the nearest corner marker and the signed distance to it (m).
+
+    Splitting the track by nearest marker gives each piece of track to one corner only, so two
+    corners closer than their window widths share the track at the midpoint instead of one of
+    them taking it all (or both counting it).
+    """
+    s = np.asarray(distance_m, dtype=float)
+    c = np.asarray(corner_distance_m, dtype=float)
+    d = (s[None, :] - c[:, None] + lap_length_m / 2) % lap_length_m - lap_length_m / 2
+    k = np.argmin(np.abs(d), axis=0)
+    return k, d[k, np.arange(len(s))]
+
+
+def corner_windows(distance_m: NDArray[np.float64], corner_distance_m: NDArray[np.float64],
+                   lap_length_m: float, half_width_m: float) -> list[NDArray[np.bool_]]:
+    """Per corner, the grid points within `half_width_m` of its marker that are nearest to it."""
+    if len(corner_distance_m) == 0:
+        return []
+    k, d = nearest_corner(distance_m, corner_distance_m, lap_length_m)
+    return [(k == i) & (np.abs(d) <= half_width_m) for i in range(len(corner_distance_m))]

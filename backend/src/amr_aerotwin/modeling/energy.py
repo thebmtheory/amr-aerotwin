@@ -27,6 +27,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from amr_aerotwin.modeling.intervals import boot_ci, boot_ci_columns
 from amr_aerotwin.physics.dynamics import VehicleState
 from amr_aerotwin.physics.vehicle_params import straight_segments
 
@@ -153,20 +154,26 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     # Note: the shape alone cannot separate causes. A point-mass simulation shows that a
     # corner-exit deficit plus extra drag also gives a flat first half and a late loss, so the
     # profile locates the loss along the straight but does not attribute it.
+    n = len(arr)
+    lo, hi = boot_ci_columns(boots, n)
     out = pd.DataFrame({
         "bin": per_event.columns.astype(int),
         "fraction": (per_event.columns.astype(float) + 0.5) / PROFILE_BINS,
         "gap_kmh": np.nanmean(arr, axis=0),
-        "ci_lo": np.nanpercentile(boots, 5, axis=0),
-        "ci_hi": np.nanpercentile(boots, 95, axis=0),
+        "ci_lo": lo,
+        "ci_hi": hi,
     })
     out.attrs["growth_kmh"] = float(np.nanmean(arr[:, -1] - arr[:, 0]))
-    out.attrs["growth_ci90"] = (float(np.nanpercentile(growth, 5)), float(np.nanpercentile(growth, 95)))
+    out.attrs["growth_ci90"] = boot_ci(growth, n)
     out.attrs["first_half_kmh"] = float(np.nanmean(arr[:, half - 1] - arr[:, 0]))
-    out.attrs["first_half_ci90"] = (float(np.nanpercentile(first, 5)), float(np.nanpercentile(first, 95)))
+    out.attrs["first_half_ci90"] = boot_ci(first, n)
     out.attrs["second_half_kmh"] = float(np.nanmean(arr[:, -1] - arr[:, half]))
-    out.attrs["second_half_ci90"] = (float(np.nanpercentile(second, 5)), float(np.nanpercentile(second, 95)))
-    out.attrs["n_events"] = int(len(arr))
+    out.attrs["second_half_ci90"] = boot_ci(second, n)
+    # Leave-one-event-out range of the second-half change: does any single event carry it?
+    ev_second = arr[:, -1] - arr[:, half]
+    loo = [float(np.nanmean(np.delete(ev_second, i))) for i in range(n)] if n > 2 else []
+    out.attrs["second_half_loo_range"] = (min(loo), max(loo)) if loo else (float("nan"), float("nan"))
+    out.attrs["n_events"] = int(n)
     per_straight = d.pivot_table(index=["round", "straight"], columns="bin", values="gap_kmh")
     late = (per_straight.iloc[:, -1] - per_straight.iloc[:, half]).dropna()
     out.attrs["n_straights"] = int(len(late))
@@ -181,9 +188,9 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
         per_ev_t = d.groupby("round")[["t_total", "t_build"]].sum().to_numpy()
         tb = per_ev_t[rng.integers(0, len(per_ev_t), size=(n_boot, len(per_ev_t)))].mean(axis=1)
         out.attrs["time_total_s"] = float(per_ev_t[:, 0].mean())
-        out.attrs["time_total_ci90"] = (float(np.percentile(tb[:, 0], 5)), float(np.percentile(tb[:, 0], 95)))
+        out.attrs["time_total_ci90"] = boot_ci(tb[:, 0], len(per_ev_t))
         out.attrs["time_build_s"] = float(per_ev_t[:, 1].mean())
-        out.attrs["time_build_ci90"] = (float(np.percentile(tb[:, 1], 5)), float(np.percentile(tb[:, 1], 95)))
+        out.attrs["time_build_ci90"] = boot_ci(tb[:, 1], len(per_ev_t))
     return out
 
 
@@ -199,4 +206,5 @@ def relative_metric(teams: pd.DataFrame, team: str, col: str, n_boot: int = 2000
         return {"mean": float("nan"), "lo": float("nan"), "hi": float("nan"), "n": int(len(v))}
     rng = np.random.default_rng(seed)
     boots = v[rng.integers(0, len(v), size=(n_boot, len(v)))].mean(axis=1)
-    return {"mean": float(v.mean()), "lo": float(np.percentile(boots, 5)), "hi": float(np.percentile(boots, 95)), "n": int(len(v))}
+    lo, hi = boot_ci(boots, len(v))
+    return {"mean": float(v.mean()), "lo": lo, "hi": hi, "n": int(len(v))}

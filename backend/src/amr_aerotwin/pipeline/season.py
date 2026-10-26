@@ -27,10 +27,12 @@ from amr_aerotwin.modeling.corner_model import (
     team_corner_deficit,
 )
 from amr_aerotwin.modeling.energy import relative_metric, speed_gap_profile
+from amr_aerotwin.modeling.intervals import boot_ci, boot_ci_columns
 from amr_aerotwin.modeling.powertrain import joint_deficit  # noqa: F401  (used by powertrain_analysis)
 from amr_aerotwin.modeling.season import (
     bayesian_changepoint,
     car_vs_driver_variance,
+    changepoint_count_evidence,
     supertime_table,
     upgrade_effects,
 )
@@ -208,7 +210,8 @@ def _bootstrap_mean(values: np.ndarray, n_boot: int = 1000, seed: int = 0) -> tu
         return (np.nan, np.nan, np.nan)
     rng = np.random.default_rng(seed)
     boots = [rng.choice(v, len(v)).mean() for _ in range(n_boot)]
-    return float(v.mean()), float(np.percentile(boots, 5)), float(np.percentile(boots, 95))
+    lo, hi = boot_ci(boots, len(v))
+    return float(v.mean()), lo, hi
 
 
 def aero_map(teams: pd.DataFrame, events: dict[str, dict]) -> dict[str, Any]:
@@ -462,26 +465,28 @@ def decomposition_summary(rows: list[dict[str, Any]], n_boot: int = 4000, seed: 
         act, pred = g["actual_gap_s"].to_numpy(), g["predicted_gap_s"].to_numpy()
         n = len(g)
         idx = rng.integers(0, n, size=(n_boot, n))
-        ratio_boot = pred[idx].sum(1) / act[idx].sum(1)
         sd = np.array(g["straight_draws"].tolist())  # events x draws
-        # Resample events and, within each, one posterior draw: between-event spread plus
-        # each event's parameter uncertainty
+        pdraw = np.array(g["predicted_draws"].tolist())
+        # Resample events and, within each, one draw of the simulation's inputs (pole-car
+        # posterior and grip-ratio uncertainty): between-event spread plus each event's own
         pick = rng.integers(0, sd.shape[1], size=(n_boot, n))
         straight_mean_draws = sd[idx, pick].mean(axis=1)
+        ratio_boot = pdraw[idx, pick].sum(1) / act[idx].sum(1)
         r = float(np.corrcoef(pred, act)[0, 1]) if n > 2 else float("nan")
         zr, se = np.arctanh(np.clip(r, -0.999, 0.999)), 1 / np.sqrt(max(n - 3, 1))
         out[str(season)] = {
             "n_events": n,
             "mean_actual_s": float(act.mean()), "mean_predicted_s": float(pred.mean()),
             "ratio_of_means": float(pred.sum() / act.sum()),
-            "ratio_ci90": [float(np.percentile(ratio_boot, 5)), float(np.percentile(ratio_boot, 95))],
+            "ratio_ci90": list(boot_ci(ratio_boot, n)),
+            "ratio_draws_mean": float(np.mean(ratio_boot)),
             "r2_event_level": float(1 - np.sum((act - pred) ** 2) / np.sum((act - act.mean()) ** 2)),
             "mae_s": float(np.mean(np.abs(act - pred))),
             "correlation": r,
             "correlation_ci90": [float(np.tanh(zr - 1.6448536 * se)), float(np.tanh(zr + 1.6448536 * se))],
             "mean_grip_s": float(g["grip_s"].mean()),
             "mean_straight_s": float(g["straight_s"].mean()),
-            "straight_ci90": [float(np.percentile(straight_mean_draws, 5)), float(np.percentile(straight_mean_draws, 95))],
+            "straight_ci90": list(boot_ci(straight_mean_draws, n)),
             "spearman": float(st.spearmanr(pred, act).statistic) if n > 2 else float("nan"),
         }
     return out
@@ -611,8 +616,8 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
             lap_rate = 100 * np.nansum(L) / np.nansum(R)
             corners = [i for i, c in enumerate(cols) if c != "straights"]
             st_i = cols.index("straights") if "straights" in cols else None
-            row = {"sections": cols, "rate_pct": rate.tolist(),
-                   "ci_lo": np.percentile(boot, 5, 0).tolist(), "ci_hi": np.percentile(boot, 95, 0).tolist(),
+            lo, hi = boot_ci_columns(boot, len(L))
+            row = {"sections": cols, "rate_pct": rate.tolist(), "ci_lo": np.asarray(lo).tolist(), "ci_hi": np.asarray(hi).tolist(),
                    "lap_rate_pct": float(lap_rate), "n_events": int(len(L))}
             if st_i is not None and corners:
                 corner_rate = 100 * np.nansum(L[:, corners]) / np.nansum(R[:, corners])
@@ -620,7 +625,7 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
                 ratio = boot[:, st_i] / np.where(np.abs(b_corner) > 1e-9, b_corner, np.nan)
                 row.update({"corner_rate_pct": float(corner_rate),
                             "straight_to_corner_ratio": float(rate[st_i] / corner_rate) if corner_rate else float("nan"),
-                            "straight_to_corner_ci90": [float(np.nanpercentile(ratio, 5)), float(np.nanpercentile(ratio, 95))]})
+                            "straight_to_corner_ci90": list(boot_ci(ratio, len(L)))})
             if st_i is not None and len(L) >= min_events:
                 st_boot[team] = boot[:, st_i]
             teams_out[team] = row
@@ -634,7 +639,7 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
             vs_field[str(season)] = _r({
                 "next_team": nxt, "next_rate_pct": point[nxt],
                 "ratio": t_rate / point[nxt] if point[nxt] > 0 else float("nan"),
-                "ratio_ci90": [float(np.nanpercentile(ratio_b, 5)), float(np.nanpercentile(ratio_b, 95))],
+                "ratio_ci90": list(boot_ci(ratio_b, int(teams_out[target]["n_events"]))),
                 "p_ratio_above_2": float(np.nanmean(ratio_b > 2)),
                 "n_rivals": len(rivals),
             }, 4)
@@ -645,9 +650,18 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
 def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) -> dict[str, Any]:
     tables = load_tables(out_dir)
     events = {p.stem: json.loads(p.read_text()) for p in sorted((out_dir / "events").glob("*.json"))}
+    # Wet qualifying (most laps on intermediates or wets) says little about the dry car: such
+    # events are left out of everything built on qualifying; their dry races still count
+    wet = {k: e for k, e in events.items() if e.get("wet_session")}
+    wet_keys = {(e["season"], e["round"]) for e in wet.values()}
+    events = {k: e for k, e in events.items() if k not in wet}
+    for name, t in tables.items():
+        if name != "race_pace" and not t.empty and {"season", "round"} <= set(t.columns):
+            tables[name] = t[[(sr, rd) not in wet_keys for sr, rd in zip(t["season"], t["round"])]]
     drivers = tables["drivers"]
     drivers = drivers[drivers["passed_checks"].astype(bool)]
-    result: dict[str, Any] = {"n_events": len(events)}
+    result: dict[str, Any] = {"n_events": len(events),
+                              "wet_events_excluded": [f"{e['event']} {e['season']}" for e in wet.values()]}
 
     # Supertimes and AMR changepoints
     # Pace analyses use official timing for every driver, not only laps with usable telemetry
@@ -666,14 +680,31 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         g = g.sort_values("round")
         x = event_track_x[event_track_x["season"] == season].set_index("round")["track_x"].reindex(g["round"])
         xv = x.fillna(x.mean()).to_numpy()
-        cp = bayesian_changepoint(g["gap_pct"].to_numpy(), xv, list(g["event"]), g["round"].to_numpy())
-        sens = {str(gg): float(bayesian_changepoint(g["gap_pct"].to_numpy(), xv, g=gg).p_no_change) for gg in (1.0, 10.0, 100.0)}
+        yv = g["gap_pct"].to_numpy()
+        cp = bayesian_changepoint(yv, xv, list(g["event"]), g["round"].to_numpy())
+        sens = {str(gg): float(bayesian_changepoint(yv, xv, g=gg).p_no_change) for gg in (1.0, 10.0, 100.0)}
+        # Sensitivity to both prior choices: the coefficient prior scale g and P(no change)
+        grid = []
+        for gg in (1.0, 10.0, 100.0):
+            for p0 in (0.25, 0.5, 0.75):
+                c2 = bayesian_changepoint(yv, xv, list(g["event"]), g=gg, prior_no_change=p0)
+                grid.append({"g": gg, "prior_no_change": p0, "p_no_change": c2.p_no_change,
+                             "map_event": c2.events[c2.map_index] if c2.map_index is not None else None,
+                             "map_probability": c2.map_probability})
+        count = changepoint_count_evidence(yv, xv)
+        pair = count.get("map_pair_index")
         cps[str(season)] = {
             "map_probability": _r(cp.map_probability, 4), "p_no_change_by_prior_g": _r(sens, 4),
-            "rounds": _r(cp.rounds), "events": cp.events, "gap_pct": _r(g["gap_pct"].to_numpy(), 3),
+            "prior_sensitivity": _r(grid, 4),
+            "rounds": _r(cp.rounds), "events": cp.events, "gap_pct": _r(yv, 3),
             "posterior_tau": _r(cp.posterior_tau, 4), "p_no_change": _r(cp.p_no_change, 4),
             "map_event": cp.events[cp.map_index] if cp.map_index is not None else None,
             "effect_pct": _r(cp.effect_mean_pct, 3), "effect_ci90_pct": _r(cp.effect_ci90_pct, 3),
+            "effect_avg_pct": _r(cp.effect_avg_pct, 3), "effect_avg_ci90_pct": _r(cp.effect_avg_ci90_pct, 3),
+            "bf_two_vs_one": _r(count["bf_two_vs_one"], 3), "bf_one_vs_none": _r(count["bf_one_vs_none"], 3),
+            "two_change_events": [cp.events[i] for i in pair] if isinstance(pair, list) else None,  # type: ignore[union-attr]
+            "two_change_steps_pct": _r(count.get("map_pair_steps"), 3),
+            "two_change_pair_probability": _r(count.get("map_pair_probability"), 4),
         }
     result["changepoints"] = cps
 
@@ -695,16 +726,24 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         major = ups[ups["major_performance_upgrade"].isin(["major", "partial"])]
         panel = st.merge(event_track_x, on=["season", "round"], how="left")
         effects = upgrade_effects(panel, major[["season", "grand_prix"]].rename(columns={"grand_prix": "event"}), TARGET_TEAM)
-        # Holm adjustment of the team-placebo p-values across the declared upgrades tested
-        order = np.argsort([e.team_placebo_p for e in effects])
-        holm = np.zeros(len(effects))
-        running = 0.0
-        for rank, i in enumerate(order):
-            running = max(running, min(1.0, (len(effects) - rank) * effects[i].team_placebo_p))
-            holm[i] = running
+        def holm(ps: list[float]) -> np.ndarray:
+            # Holm step-down adjustment across the declared upgrades tested
+            order, adj, running = np.argsort(ps), np.zeros(len(ps)), 0.0
+            for rank, i in enumerate(order):
+                running = max(running, min(1.0, (len(ps) - rank) * ps[i]))
+                adj[i] = running
+            return adj
+
+        holm_team, holm_lead = holm([e.team_placebo_p for e in effects]), holm([e.lead_p for e in effects])
+        lead_floor = [1.0 / (1 + (e.n_time_placebos if e.lead_test == "time" else e.n_team_placebos)) for e in effects]
         result["upgrades"] = {
             "declared": _r(ups.to_dict("records")),
-            "effects": [_r({**e.__dict__, "team_placebo_p_holm": float(holm[i])}, 4) for i, e in enumerate(effects)],
+            "effects": [_r({**e.__dict__, "team_placebo_p_holm": float(holm_team[i]), "lead_p_holm": float(holm_lead[i])}, 4)
+                        for i, e in enumerate(effects)],
+            # Smallest Holm-adjusted p any of these tests could reach (number of tests x p floor):
+            # above 0.10 means no single upgrade can be declared significant after adjustment
+            "holm_floor_team": _r(len(effects) * min(e.p_floor for e in effects), 4) if effects else None,
+            "holm_floor_lead": _r(len(effects) * min(lead_floor), 4) if effects else None,
         }
 
     # Corner model, team deficits, wind, Shapley
@@ -769,9 +808,10 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
             piv = g.pivot_table(index="round", columns="class", values="time_s")
             arr = piv.to_numpy()
             boots = np.nanmean(arr[rng_g.integers(0, len(arr), size=(2000, len(arr)))], axis=1)
+            g_lo, g_hi = boot_ci_columns(boots, len(arr))
             result["gap_by_class"][str(season)] = _r({
                 "classes": list(piv.columns), "mean_s": np.nanmean(arr, axis=0).tolist(),
-                "ci_lo": np.nanpercentile(boots, 5, axis=0).tolist(), "ci_hi": np.nanpercentile(boots, 95, axis=0).tolist(),
+                "ci_lo": np.asarray(g_lo).tolist(), "ci_hi": np.asarray(g_hi).tolist(),
                 "mean_total_s": float(g.groupby("round")["total_s"].first().mean()), "n_events": int(len(piv)),
                 "per_event": g[["round", "event", "class", "time_s"]].to_dict("records"),
             }, 4)
@@ -859,6 +899,20 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         "gps_lag_s_median": _r(float(d_all["q_gps_lag_s"].median()), 3),
         "projection_rms_m_median": _r(float(d_all["q_projection_rms_m"].median()), 2),
     }
+    if "q_sector_time_error_s" in d_all:
+        # Independent check of the alignment: aligned clock vs official sector times, passing laps
+        e = d_all.loc[d_all["passed_checks"].astype(bool), "q_sector_time_error_s"].dropna().abs()
+        result["data_quality"].update({
+            "sector_time_error_median_s": _r(float(e.median()), 4), "sector_time_error_rms_s": _r(float(np.sqrt((e ** 2).mean())), 4),
+            "sector_time_error_p95_s": _r(float(e.quantile(0.95)), 4), "sector_time_error_max_s": _r(float(e.max()), 4),
+            "n_laps_sector_checked": int(len(e)),
+        })
+        ok = d_all[d_all["passed_checks"].astype(bool)]
+        gap = ok[["q_start_line_gap_m", "q_finish_line_gap_m"]].abs().max(axis=1)
+        if len(gap):
+            top = ok.loc[gap.idxmax()]
+            result["data_quality"].update({"max_clock_offset_m": _r(float(gap.max()), 1),
+                                           "max_clock_offset_lap": f"{top['driver']} at the {top['season']} {top['event']}"})
     skipped_path = out_dir / "skipped.json"
     result["skipped_events"] = json.loads(skipped_path.read_text()) if skipped_path.exists() else []
     (out_dir / "season.json").write_text(json.dumps(_r(result, 6), separators=(",", ":"), allow_nan=False), encoding="utf-8")

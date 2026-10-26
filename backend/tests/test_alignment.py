@@ -148,3 +148,24 @@ def test_car_data_stall_check_flags_a_held_speed_channel_only(fixture_repo):
     assert not check_lap(stalled[d0]).passed
     others = [abs(score[d] - clean[d]) for d in laps if d != d0]
     assert max(others) < 10.0  # one bad lap barely moves the field median
+
+
+@pytest.mark.parametrize("offset", [0.25, -0.2])
+def test_a_shifted_lap_clock_is_re_timed_not_moved_along_the_track(offset):
+    """The archive's lap clock can be offset from the timing line, for GPS and car data together.
+    That is a time shift: after alignment every grid point must carry the true time and speed
+    there. Treating the gap as a position error instead moves every channel along the track."""
+    ripple, v0, period = 8.0, 60.0, 7.0
+    raw0, t_lap = circle_lap_telemetry(speed_ripple_ms=ripple)
+    ref = build_reference_line(parse_raw_lap(raw0), t_lap)
+    raw, _ = circle_lap_telemetry(speed_ripple_ms=ripple, clock_offset_s=offset)
+    lap = align_lap(parse_raw_lap(raw), _meta(t_lap), AMB, ref)
+    fine = np.linspace(0, t_lap, 20001)
+    dist = v0 * fine + ripple * period / (2 * np.pi) * (1 - np.cos(2 * np.pi * fine / period))
+    s = lap.distance_m
+    t_true = np.interp(s * dist[-1] / ref.length_m, dist, fine)
+    v_true = v0 + ripple * np.sin(2 * np.pi * t_true / period)
+    inner = (s > 30) & (s < ref.length_m - 30)
+    assert np.max(np.abs(lap.time_s[inner] - t_true[inner])) < 0.02
+    assert np.max(np.abs(lap.speed_ms[inner] - v_true[inner])) < 0.3
+    assert abs(lap.quality["start_line_gap_m"]) == pytest.approx(abs(offset) * v0, rel=0.25)  # reported, not hidden

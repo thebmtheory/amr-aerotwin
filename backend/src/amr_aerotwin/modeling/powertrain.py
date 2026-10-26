@@ -33,6 +33,7 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from amr_aerotwin.domain import GRAVITY_ACCEL
+from amr_aerotwin.modeling.intervals import boot_ci
 from amr_aerotwin.physics.dynamics import VehicleState
 from amr_aerotwin.physics.vehicle_params import CRR, straight_segments
 
@@ -192,7 +193,7 @@ def joint_deficit(rows: pd.DataFrame, team: str, n_boot: int = 2000, seed: int =
     mk_boot = mk[rng.integers(0, len(mk), size=(n_boot, len(mk)))].mean(axis=1) if len(mk) else np.array([np.nan])
 
     def ci(a: NDArray[np.float64]) -> tuple[float, float]:
-        return float(np.nanpercentile(a, 5)), float(np.nanpercentile(a, 95))
+        return boot_ci(a, len(arr))
 
     return JointDeficit(
         d_power_kw=float(np.median(arr[:, 0])), d_power_ci90=ci(draws[:, 0]),

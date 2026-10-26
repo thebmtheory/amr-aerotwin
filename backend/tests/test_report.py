@@ -71,7 +71,8 @@ def test_readme_blocks_are_generated_from_results(tmp_path):
         "straight_vs_field": {"2026": {"next_team": "Cadillac", "next_rate_pct": 1.7, "ratio": 2.24, "ratio_ci90": [1.75, 2.86]}},
         "straight_profile": {"2026": {"Aston Martin": {"bins": [{"gap_kmh": -5.7}], "second_half_kmh": -3.0, "second_half_ci90": [-4.5, -1.5],
                                                        "n_straights": 6, "n_straights_losing_late": 5, "n_events": 5}}},
-        "variance_split": {"2025": {"median_event_share": 0.51}, "2026": {"median_event_share": 0.94}},
+        "variance_split": {"2025": {"median_event_share": 0.51, "car_share": 0.53, "car_share_ci90": [0.43, 0.58]},
+                           "2026": {"median_event_share": 0.94, "car_share": 0.90, "car_share_ci90": [0.83, 0.94]}},
         "data_quality": {"laps_passed": 717, "laps_total": 758},
         "skipped_events": [{"season": 2026, "event": "Chinese Grand Prix", "reason": "Only 0 laps passed checks"},
                            {"season": 2026, "event": "Spanish Grand Prix", "reason": "archive file unavailable at fetch time"}],
@@ -83,7 +84,7 @@ def test_readme_blocks_are_generated_from_results(tmp_path):
     assert update_readme(sj, readme)
     text = readme.read_text()
     assert "STALE_TEXT" not in text and text.startswith("intro\n") and "middle" in text and text.endswith("end\n")
-    assert "2.2 times as much, 90% interval 1.8 to 2.9" in text and "94%" in text and "51%" in text
+    assert "2.2 times as much, 90% interval 1.8 to 2.9" in text and "explain 90% (90% interval 83 to 94)" in text and "53% in 2025" in text
     assert "717 of 758 laps pass" in text and "Chinese 2026" in text and "Spanish 2026" in text
     assert not update_readme(sj, readme)  # idempotent
     readme.write_text("no markers here\n")

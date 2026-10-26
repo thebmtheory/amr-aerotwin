@@ -105,7 +105,7 @@ def _corner_data(n_events=12, seed=4):
             for t in range(6):
                 v = physics_speed_kmh(np.array([radius]), np.array([rho]), a, b)[0]
                 v += 3.0 * np.sin(radius / 40) - 2.0 * (t == 0) + rng.normal(0, 2.0)
-                rows.append({"event_key": f"E{e}", "corner_key": f"C{c}", "circuit_corner": f"E{e}C{c}",
+                rows.append({"event_key": f"E{e}", "circuit": f"Circuit{e // 2}", "corner_key": f"C{c}", "circuit_corner": f"E{e}C{c}",
                              "team": "Aston Martin" if t == 0 else f"T{t}", "season": 2025 + (e % 2),
                              "v_min_kmh": min(v, 330), "radius_m": radius, "turn_angle_deg": 90.0,
                              "approach_m": 400.0, "rho_kg_m3": rho, "headwind_ms": rng.normal(0, 3),
@@ -120,11 +120,15 @@ def test_physics_fit_recovers_parameters():
     assert fa == pytest.approx(a, rel=0.05) and fb == pytest.approx(b, rel=0.15)
 
 
-def test_cross_validation_is_grouped_by_event_and_conformal_is_calibrated():
+def test_cross_validation_is_grouped_by_circuit_and_conformal_is_calibrated():
     df, _ = _corner_data()
     rep = cross_validate(df)
-    folds = rep.oof.groupby("event_key")["fold"].nunique()
-    assert (folds == 1).all()  # no event is split across folds
+    # Events come in pairs at the same circuit (2025 and 2026): a circuit, not just an event,
+    # must never be split across folds, or the same corners would be in train and test
+    circuit_of = df.drop_duplicates("event_key").set_index("event_key")["circuit"]
+    assert (rep.oof.assign(c=rep.oof["event_key"].map(circuit_of)).groupby("c")["fold"].nunique() == 1).all()
+    assert rep.oof["fold"].nunique() > 1
+    assert (rep.oof.groupby("event_key")["fold"].nunique() == 1).all()
     m = rep.metrics.set_index("model")
     assert m.loc["hybrid", "rmse_kmh"] < m.loc["physics", "rmse_kmh"]
     assert 0.85 <= rep.conformal_coverage <= 0.96

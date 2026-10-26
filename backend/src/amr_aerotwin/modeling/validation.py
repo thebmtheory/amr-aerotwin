@@ -17,8 +17,12 @@ from amr_aerotwin.physics.kinematics import gps_spline_kinematics
 LAP_CHECKS: dict[str, tuple[str, float, float]] = {
     # metric: (description, lower bound, upper bound)
     "projection_rms_m": ("GPS fixes' RMS distance from the reference line (m)", 0.0, 6.0),
-    "finish_line_gap_m": ("GPS position vs timing line at the end of the lap (m)", -25.0, 25.0),
-    "start_line_gap_m": ("GPS position vs timing line at the start of the lap (m)", -25.0, 25.0),
+    # The line gaps are mostly an offset of the lap's clock (the lap is re-timed for it), so they
+    # only need to agree with each other; their size is a loose sanity bound
+    "finish_line_gap_m": ("GPS position vs timing line at the end of the lap (m)", -150.0, 150.0),
+    "start_line_gap_m": ("GPS position vs timing line at the start of the lap (m)", -150.0, 150.0),
+    "line_gap_mismatch_m": ("start gap minus end gap; a pure clock offset moves both alike (m)", -25.0, 25.0),
+    "sector_time_error_s": ("aligned clock vs official sector times at the sector lines (s)", -0.15, 0.15),
     "speed_time_consistency_pct": ("integral of 1/v vs the timing channel (%)", -1.5, 1.5),
     "gps_speed_rms_ms": ("GPS-derived speed vs wheel-speed channel, RMS (m/s)", 0.0, 4.5),
     "max_sample_gap_m": ("largest gap between telemetry samples (m)", 0.0, 120.0),
@@ -31,6 +35,7 @@ LAP_CHECKS: dict[str, tuple[str, float, float]] = {
 }
 
 TURNING_NUMBER_TOLERANCE = 0.035
+TURNING_NUMBER_HIGH = 0.05
 
 
 @dataclass(frozen=True)
@@ -41,7 +46,7 @@ class LapCheckResult:
 
 # Metrics that may legitimately be missing (no speed-trap reading for that lap; too few GPS
 # fixes or laps for the stall check)
-OPTIONAL_CHECKS = {"speed_trap_minus_max_kmh", "car_data_stall_kmh"}
+OPTIONAL_CHECKS = {"speed_trap_minus_max_kmh", "car_data_stall_kmh", "sector_time_error_s", "line_gap_mismatch_m"}
 
 STALL_DECEL_G = 7.5  # braking no F1 car reaches (peak is about 5-6 g)
 STALL_ACCEL_G = 3.0  # traction-limited acceleration stays under about 2 g
@@ -105,13 +110,46 @@ def car_data_stall_kmh(laps: dict[str, AlignedLap], step_window_m: float = 15.0)
     return out
 
 
+def sector_time_errors_s(laps: dict[str, AlignedLap]) -> dict[str, float]:
+    """Per lap: largest error (s) of the aligned time channel at the two internal sector lines.
+
+    Official sector times come from the timing loops, independently of telemetry. The track
+    position of each sector line is the median over laps of where their own aligned clock
+    reads the official sector time; each lap's error is then its aligned time at that position
+    minus its official time. This checks the whole alignment chain (GPS lag, line crossings,
+    distance mapping) against an independent clock. NaN when sector times are missing.
+    """
+    cum = {}
+    for d, lp in laps.items():
+        s1, s2, _ = lp.meta.sector_times_s
+        if np.isfinite(s1) and np.isfinite(s2):
+            cum[d] = (s1, s1 + s2)
+    if len(cum) < 5:
+        return {d: float("nan") for d in laps}
+    lines = [float(np.median([np.interp(c[k], laps[d].time_s, laps[d].distance_m) for d, c in cum.items()])) for k in (0, 1)]
+    out = {}
+    for d, lp in laps.items():
+        if d not in cum:
+            out[d] = float("nan")
+            continue
+        errs = [float(np.interp(lines[k], lp.distance_m, lp.time_s) - cum[d][k]) for k in (0, 1)]
+        out[d] = max(errs, key=abs)
+    return out
+
+
 def geometry_ok(turning_number: float, expected_turns: int = 1) -> bool:
     """Integrated curvature must match the circuit's turn count (GPS dropouts break this).
 
     Most circuits make one full turn; a figure-of-eight such as Suzuka makes zero. The
-    expected count comes from the reference path's own heading (`expected_turn_count`).
+    expected count comes from the reference path's own heading (`expected_turn_count`). The
+    integral runs about 1.5% high on clean data (the smoothed GPS path cuts corners, so curvature
+    per odometer metre is slightly overestimated; per-lap mean 1.015, sd 0.019), so the band is
+    asymmetric: from 3.5% below to 5% above the turn count.
     """
-    return abs(abs(turning_number) - abs(expected_turns)) <= TURNING_NUMBER_TOLERANCE
+    n = abs(expected_turns)
+    if n == 0:
+        return abs(turning_number) <= TURNING_NUMBER_TOLERANCE
+    return -TURNING_NUMBER_TOLERANCE <= abs(turning_number) / n - 1.0 <= TURNING_NUMBER_HIGH
 
 
 def expected_turn_count(x_m: np.ndarray, y_m: np.ndarray) -> int:
