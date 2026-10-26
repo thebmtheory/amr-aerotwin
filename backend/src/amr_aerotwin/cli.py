@@ -1,4 +1,4 @@
-"""Command line entry point: `aerotwin fetch | build | analyse | report | all`."""
+"""Command line entry point: `aerotwin fetch | build | analyse | report | all | event-report`."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from amr_aerotwin.pipeline.season import PROCESSED_DIR, analyse, build, fetch
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="aerotwin", description=__doc__)
-    parser.add_argument("command", choices=["fetch", "build", "analyse", "report", "all"])
+    parser.add_argument("command", choices=["fetch", "build", "analyse", "report", "all", "event-report"])
+    parser.add_argument("--event", default="British Grand Prix", help="Grand Prix name for event-report")
+    parser.add_argument("--reports", type=Path, default=PROCESSED_DIR.parents[1] / "reports")
     parser.add_argument("--years", type=int, nargs="+", default=[2025, 2026])
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--out", type=Path, default=PROCESSED_DIR)
@@ -36,6 +38,10 @@ def main(argv: list[str] | None = None) -> None:
 
         build_site(args.out, args.site)
         build_note(args.out / "season.json", args.site.parent / "docs" / "technical_note.md")
+    if args.command == "event-report":
+        from amr_aerotwin.report.event_report import build_event_report
+
+        logging.info("wrote %s", build_event_report(args.event, args.reports, args.out))
     logging.info("done in %.0f s", time.time() - t0)
 
 

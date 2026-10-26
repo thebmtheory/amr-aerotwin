@@ -1,0 +1,761 @@
+<title>Aston Martin at Silverstone</title>
+<meta name="description" content="Aston Martin against every other team at the British Grand Prix, 2025 and 2026 qualifying and race, from public timing data.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout concept: an engineering debrief for one circuit. Timing-screen display type for
+   headings and figures, plain sans for prose. Racing green marks the car under study, a warm
+   orange the team directly ahead of it, ink the pole lap and grey the rest of the field. */
+:root {
+  --bg: #f6f8f7; --band: #ecf0ee; --surface: #ffffff; --ink: #0f1513; --ink-2: #44514c; --muted: #5c6863;
+  --rule: #d9e0dd; --amr: #00856a; --rival: #c46a12; --pole: #26302c; --field: #a3ada9; --gain: #2a78d6;
+  --loss: #c2362b; --focus: #2a78d6; --flag: #8a6d00;
+  --font-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --step--1: 0.8125rem; --step-0: 1rem; --step-1: 1.25rem; --step-2: 1.75rem; --step-3: clamp(1.9rem, 4vw, 2.9rem);
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1312; --band: #131a18; --surface: #171f1c; --ink: #e8efec; --ink-2: #b3c0bb; --muted: #93a09b;
+    --rule: #29332f; --amr: #18a07f; --rival: #d27d32; --pole: #e8efec; --field: #5d6864; --gain: #4a8ae0;
+    --loss: #e0584c; --focus: #4a8ae0; --flag: #d9b84a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1312; --band: #131a18; --surface: #171f1c; --ink: #e8efec; --ink-2: #b3c0bb; --muted: #93a09b;
+  --rule: #29332f; --amr: #18a07f; --rival: #d27d32; --pole: #e8efec; --field: #5d6864; --gain: #4a8ae0;
+  --loss: #e0584c; --focus: #4a8ae0; --flag: #d9b84a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 64px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 var(--step-0)/1.6 var(--font-body); -webkit-font-smoothing: antialiased; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+a { color: var(--gain); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.band { background: var(--band); padding-block: 48px; }
+.section { padding-block: 48px; }
+
+.masthead { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--rule); }
+.masthead-inner { display: flex; align-items: center; gap: 8px 20px; min-height: 52px; flex-wrap: wrap; padding-block: 6px; }
+.brand { font: 700 1.2rem/1 var(--font-display); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink); text-decoration: none; }
+.brand::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--amr); margin-right: 8px; vertical-align: 1px; }
+.nav { display: flex; gap: 4px 14px; flex-wrap: wrap; flex: 1 1 auto; }
+.nav a { font: 500 var(--step--1)/1 var(--font-body); color: var(--ink-2); text-decoration: none; padding: 6px 0; }
+.nav a:hover { color: var(--ink); }
+
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+h1 { font-weight: 600; font-size: var(--step-3); line-height: 1.05; max-width: 24ch; }
+h2 { font-weight: 600; font-size: var(--step-2); line-height: 1.1; margin-bottom: 12px; }
+h3 { font-weight: 600; font-size: var(--step-1); margin-bottom: 6px; }
+.eyebrow { font: 500 var(--step--1)/1.3 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 14px; }
+.lede { font-size: 1.125rem; color: var(--ink-2); max-width: 66ch; margin: 16px 0 0; }
+.prose { max-width: 68ch; color: var(--ink-2); }
+.prose p { margin: 0 0 12px; }
+.prose strong { color: var(--ink); font-weight: 600; }
+.note { font-size: var(--step--1); color: var(--muted); max-width: 80ch; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 28px; }
+.tile { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tile .k { font: 500 var(--step--1)/1.3 var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.tile .v { font: 600 2rem/1.05 var(--font-display); font-variant-numeric: tabular-nums; color: var(--ink); }
+.tile .v.amr { color: var(--amr); }
+.tile .d { font-size: var(--step--1); color: var(--ink-2); }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 0 20px; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.seg button { font: 500 var(--step--1)/1 var(--font-body); color: var(--ink-2); background: transparent; border: 0; padding: 8px 14px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.season-bar { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 53px); z-index: 4; background: var(--bg); border-bottom: 1px solid var(--rule); }
+.season-bar .wrap { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-block: 8px; }
+.season-bar .label { font: 500 var(--step--1)/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 20px; }
+.fig { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 14px 8px; margin: 0; min-width: 0; }
+.fig figcaption { font-size: var(--step--1); color: var(--ink-2); margin-bottom: 6px; display: flex; flex-direction: column; gap: 2px; }
+.fig figcaption strong { color: var(--ink); font-weight: 600; font-size: 0.95rem; }
+.fig figcaption span { color: var(--muted); }
+.chart { width: 100%; height: 360px; }
+.chart.tall { height: 460px; }
+.chart.map { height: 480px; }
+.chart.short { height: 300px; }
+.stack { display: flex; flex-direction: column; gap: 20px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: var(--step--1); color: var(--ink-2); margin: 4px 0 0; }
+.legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.flag { color: var(--flag); font-weight: 600; }
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--step--1); font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font: 500 var(--step--1)/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+tr.amr td { color: var(--amr); font-weight: 600; }
+tr.rival td:first-child { color: var(--rival); font-weight: 600; }
+
+.method { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 20px 32px; }
+.method h3 { font-size: 1.1rem; }
+.method p { margin: 0 0 10px; color: var(--ink-2); font-size: 0.95rem; }
+footer { padding-block: 32px; border-top: 1px solid var(--rule); }
+@media (max-width: 600px) { .chart.map { height: 380px; } }
+@media (max-width: 900px) {
+  .masthead { position: static; }
+  .season-bar .note { display: none; }
+  .chart.tall { height: 420px; }
+}
+</style>
+
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <a class="brand" href="#top">Track Science</a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#qualifying">Qualifying</a>
+      <a href="#sections">Where the time goes</a>
+      <a href="#lap">The lap</a>
+      <a href="#corners">Corners</a>
+      <a href="#straights">Straights</a>
+      <a href="#car">Grip and speed</a>
+      <a href="#race">Race</a>
+      <a href="#context">In context</a>
+      <a href="#method">Method</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="section">
+    <div class="wrap">
+      <p class="eyebrow" id="eyebrow">British Grand Prix · Silverstone · public timing data</p>
+      <h1 id="headline">Aston Martin at Silverstone</h1>
+      <p class="lede" id="lede"></p>
+      <div class="tiles" id="tiles"></div>
+      <p class="note" id="hero-note" style="margin-top:16px"></p>
+    </div>
+  </section>
+
+  <div class="season-bar">
+    <div class="wrap">
+      <span class="label">Detail for</span>
+      <div class="seg" role="group" aria-label="Season" id="season-seg"></div>
+      <span class="note" id="season-note"></span>
+    </div>
+  </div>
+
+  <section id="qualifying" class="band">
+    <div class="wrap">
+      <h2>Qualifying order</h2>
+      <div class="prose"><p id="t-qualifying"></p></div>
+      <figure class="fig">
+        <figcaption><strong>Gap to pole, every team</strong><span>Each team's faster driver (bar) and the teammate (dot), official lap times</span></figcaption>
+        <div class="chart" id="ch-order" role="img" aria-label="Gap to pole for every team"></div>
+      </figure>
+    </div>
+  </section>
+
+  <section id="sections" class="section">
+    <div class="wrap">
+      <h2>Where the time goes</h2>
+      <div class="prose"><p id="t-sections"></p></div>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Units" id="unit-seg"></div>
+        <span class="note">Loss rate = time lost in a section ÷ the pole lap's time there. A car that is uniformly slower has the same rate everywhere.</span>
+      </div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Time lost to the pole lap by section, every team</strong><span id="c-sections"></span></figcaption>
+          <div class="chart" id="ch-sections" role="img" aria-label="Time lost by section for every team"></div>
+          <div class="legend"><span><i style="background:var(--amr)"></i>Aston Martin</span><span><i style="background:var(--rival)"></i><span id="lg-rival">team ahead</span></span><span><i style="background:var(--field)"></i>other teams</span></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong id="c-rival-title">Aston Martin vs the team ahead</strong><span>Each bar is the time lost (+) or gained (−) in that section; they add up to the lap-time gap</span></figcaption>
+          <div class="chart" id="ch-rival" role="img" aria-label="Section-by-section difference to the team ahead"></div>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="lap" class="band">
+    <div class="wrap">
+      <h2>The lap</h2>
+      <div class="prose"><p id="t-lap"></p></div>
+      <div class="stack">
+        <figure class="fig">
+          <figcaption><strong>Speed and time gap along the lap</strong><span id="c-trace"></span></figcaption>
+          <div class="chart tall" id="ch-trace" role="img" aria-label="Speed traces and cumulative time gap"></div>
+          <div class="legend" id="lg-trace"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Where on the track Aston Martin loses time to the pole lap</strong><span>Time lost per 100 m of track (centred window). Blue = gaining, red = losing. Numbers are turns; hover a number for its name.</span></figcaption>
+          <div class="chart map" id="ch-map" role="img" aria-label="Track map coloured by time lost"></div>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="corners" class="section">
+    <div class="wrap">
+      <h2>Corner by corner</h2>
+      <div class="prose"><p id="t-corners"></p></div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Minimum speed vs the field median</strong><span>Aston Martin's best lap minus the median of the other teams' best laps, km/h. <span class="flag">Hatched</span> = speed channel disagrees with GPS, not used.</span></figcaption>
+          <div class="chart tall" id="ch-cspeed" role="img" aria-label="Minimum corner speed difference to the field"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Time lost to the pole lap at each corner</strong><span>Braking (−120 to −20 m), apex (±20 m) and exit (+20 to +120 m) of each corner, seconds</span></figcaption>
+          <div class="chart tall" id="ch-ctime" role="img" aria-label="Time lost per corner by phase"></div>
+        </figure>
+      </div>
+      <figure class="fig" style="margin-top:20px">
+        <figcaption><strong>Every team, every corner</strong><span>Time lost to the pole lap through each corner (±120 m), seconds. Teams ordered by lap time.</span></figcaption>
+        <div class="chart tall" id="ch-heat" role="img" aria-label="Heatmap of time lost per corner for every team"></div>
+      </figure>
+    </div>
+  </section>
+
+  <section id="straights" class="band">
+    <div class="wrap">
+      <h2>The straights</h2>
+      <div class="prose"><p id="t-straights"></p></div>
+      <div class="grid2" id="straight-figs"></div>
+      <figure class="fig" style="margin-top:20px">
+        <figcaption><strong>Speed lost at full throttle</strong><span>Largest drop below the car's own peak speed while the throttle stays above 98%, km/h. Drag or gradient alone can only stop a car accelerating; speed falling at full throttle means drive power fell.</span></figcaption>
+        <div class="chart short" id="ch-ftloss" role="img" aria-label="Speed lost at full throttle on each straight"></div>
+      </figure>
+    </div>
+  </section>
+
+  <section id="car" class="section">
+    <div class="wrap">
+      <h2>Grip and straight-line speed</h2>
+      <div class="prose"><p id="t-car"></p></div>
+      <figure class="fig">
+        <figcaption><strong>High-speed grip against straight-line speed, every team</strong><span>Grip: combined acceleration at the cornering limit, read at high dynamic pressure (point-mass fit, 90% intervals). Speed: peak on the main straights vs the median of the other teams' cars.</span></figcaption>
+        <div class="chart tall" id="ch-grip" role="img" aria-label="High-speed grip against straight-line speed"></div>
+      </figure>
+    </div>
+  </section>
+
+  <section id="race" class="band">
+    <div class="wrap">
+      <h2>Race pace</h2>
+      <div class="prose"><p id="t-race"></p></div>
+      <figure class="fig" id="race-fig">
+        <figcaption><strong>Race pace gap to the fastest team</strong><span>Fixed-effects model of green-flag laps with fuel burn and tyre wear removed, seconds per lap, 90% intervals</span></figcaption>
+        <div class="chart" id="ch-race" role="img" aria-label="Race pace gap per team"></div>
+      </figure>
+    </div>
+  </section>
+
+  <section id="context" class="section">
+    <div class="wrap">
+      <h2>2025 against 2026, and Silverstone against the season</h2>
+      <div class="prose"><p id="t-context"></p></div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Aston Martin's loss rate by section</strong><span>At Silverstone and averaged over each season's events, % of the pole lap's time in that section</span></figcaption>
+          <div class="chart" id="ch-compare" role="img" aria-label="Loss rates at Silverstone against season averages"></div>
+          <div class="legend" id="lg-compare"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Aston Martin's qualifying gap at every event</strong><span>Faster driver vs pole, %. Silverstone marked.</span></figcaption>
+          <div class="chart" id="ch-context" role="img" aria-label="Qualifying gap by event"></div>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="method" class="band">
+    <div class="wrap">
+      <h2>Method and data</h2>
+      <div class="method">
+        <div>
+          <h3>Laps and references</h3>
+          <p>Qualifying: each team's fastest lap that passed every data check, against the fastest clean lap of the session. Gaps in the qualifying order use official lap times for every driver, including laps whose telemetry failed a check.</p>
+          <p>Laps are projected onto one reference line built from GPS, with the GPS-to-car-data clock offset found per lap. Time comes from the measured timing channel, so section and corner times add up exactly to the official gap.</p>
+        </div>
+        <div>
+          <h3>Sections and corners</h3>
+          <p>Corners are the archive's official turn positions; each takes 120 m either side of its apex, split into braking, apex and exit. Everything else is "straights". Corner classes come from the pole lap's minimum speed: low under 130 km/h, medium 130 to 220 km/h, high above.</p>
+          <p id="m-flags"></p>
+        </div>
+        <div>
+          <h3>Straights and grip</h3>
+          <p>Straights are the pole lap's full-throttle runs of at least 400 m. Every team's best lap is compared at the same positions, so gradient and wind are shared. Grip comes from cornering-limit points fitted against dynamic pressure; it is an effective point-mass figure, not a tyre or aero measurement.</p>
+          <p>Race pace uses green-flag laps with fuel burn and tyre wear as fixed effects; intervals are a delete-one-stint jackknife.</p>
+        </div>
+        <div>
+          <h3>Limits</h3>
+          <p>Public data has no fuel loads, ERS state, ride heights or tyre temperatures, so straight-line losses cannot be split between drag, engine power and energy strategy. Laps are set at different moments in qualifying, and track evolution mostly adds grip. One lap per team is a single sample; the season-level analysis in the main report has the intervals.</p>
+          <p id="m-warnings"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="note">Independent analysis of public timing data from the TracingInsights archive. Not affiliated with Aston Martin Aramco F1 Team or Formula 1. Generated by <span style="font-family:var(--font-mono)">aerotwin event-report</span>; every figure on this page comes from the data embedded in it.</p>
+  </div>
+</footer>
+
+<script>window.REPORT = /*REPORT_DATA*/null;</script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var R = window.REPORT, T = R.target, YEARS = Object.keys(R.seasons).sort();
+  var state = { season: YEARS[YEARS.length - 1], unit: "s" };
+  var SEC_LABEL = { straights: "Straights", high: "High-speed corners", medium: "Medium-speed corners", low: "Low-speed corners" };
+  var SECS = ["straights", "high", "medium", "low"];
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function f(x, d) { return x == null || !isFinite(x) ? "–" : Number(x).toFixed(d == null ? 2 : d).replace(/^-(?=.*[1-9])/, "−").replace(/^-/, ""); }
+  function sg(x, d) { return x == null || !isFinite(x) ? "–" : (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(x).toFixed(d == null ? 2 : d); }
+  function ord(n) { var s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+  function S(y) { return R.seasons[y || state.season]; }
+  function row(y, team) { return S(y).order.filter(function (r) { return r.team === team; })[0]; }
+  function cname(c) { return c.label + (c.name ? " " + c.name : ""); }
+  var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  function day(iso) { var p = String(iso || "").split("-"); return p.length === 3 ? +p[2] + " " + MONTHS[+p[1] - 1] + " " + p[0] : iso; }
+  function rankPhrase(r) {  // r.i = 1 for the largest gap
+    var best = r.n - r.i + 1;
+    return r.i <= r.n / 2 ? (r.i === 1 ? "worst" : ord(r.i) + "-worst") : (best === 1 ? "best" : ord(best) + "-best");
+  }
+  function cmp(x, more, less, d) { return x == null || !isFinite(x) ? "–" : f(Math.abs(x), d == null ? 1 : d) + " km/h " + (x >= 0 ? more : less); }
+
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function theme() {
+    return { ink: css("--ink"), ink2: css("--ink-2"), muted: css("--muted"), rule: css("--rule"), surface: css("--surface"),
+      amr: css("--amr"), rival: css("--rival"), pole: css("--pole"), field: css("--field"), gain: css("--gain"), loss: css("--loss"), flag: css("--flag"),
+      mono: css("--font-mono"), body: css("--font-body") };
+  }
+  function layout(t, extra) {
+    var base = {
+      margin: { l: 56, r: 16, t: 10, b: 44 }, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+      font: { family: t.body, size: 12, color: t.ink2 }, showlegend: false, hovermode: "closest",
+      hoverlabel: { bgcolor: t.surface, bordercolor: t.rule, font: { color: t.ink, family: t.body, size: 12 } },
+      xaxis: { gridcolor: t.rule, zerolinecolor: t.rule, linecolor: t.rule, tickfont: { family: t.mono, size: 11 }, automargin: true },
+      yaxis: { gridcolor: t.rule, zerolinecolor: t.muted, linecolor: t.rule, tickfont: { family: t.mono, size: 11 }, automargin: true },
+    };
+    Object.keys(extra || {}).forEach(function (k) {
+      base[k] = (typeof extra[k] === "object" && !Array.isArray(extra[k]) && base[k]) ? Object.assign({}, base[k], extra[k]) : extra[k];
+    });
+    return base;
+  }
+  function plot(id, data, lay) { Plotly.react($(id), data, lay, { displayModeBar: false, responsive: true }); }
+  function teamColor(t, team, rival) { return team === T ? t.amr : team === rival ? t.rival : t.field; }
+
+  // ------------------------------------------------------------- hero (2026 thesis, both seasons)
+  function sectionDiff(y, a, b) {
+    var s = S(y).sections; var out = {};
+    SECS.forEach(function (k) { out[k] = s[a][k] - s[b][k]; });
+    return out;
+  }
+  function hero() {
+    var y = YEARS[YEARS.length - 1], s = S(y), me = row(y, T), rv = s.rival ? row(y, s.rival) : null;
+    $("eyebrow").textContent = R.event + " · " + (s.circuit || "") + " · qualifying " + YEARS.map(function (k) { return day(S(k).date); }).join(" and ") + " · public timing data";
+    var d = rv ? sectionDiff(y, T, s.rival) : null, gapRival = rv ? me.lap_time_s - rv.lap_time_s : null;
+    var big = d ? SECS.slice().sort(function (a, b) { return d[b] - d[a]; })[0] : null;
+    var allPos = d && SECS.every(function (k) { return d[k] >= -0.005; });
+    if (d && allPos && d[big] > 0.5 * gapRival) {
+      $("headline").textContent = "At Silverstone in " + y + " Aston Martin was " + (s.target_position === s.n_teams ? "the slowest team" : ord(s.target_position) + " of " + s.n_teams) +
+        ", and more than half of its gap to the next car was on the " + (big === "straights" ? "straights" : SEC_LABEL[big].toLowerCase()) + ".";
+    } else {
+      $("headline").textContent = "Aston Martin at Silverstone: " + ord(s.target_position) + " of " + s.n_teams + " teams in " + y + ".";
+    }
+    var y0 = YEARS[0], s0 = S(y0), me0 = row(y0, T);
+    var rp = s.race_pace && s.race_pace.team_pace ? s.race_pace.team_pace.filter(function (r) { return r.team === T; })[0] : null;
+    var rpPos = rp ? s.race_pace.team_pace.slice().sort(function (a, b) { return a.gap_s - b.gap_s; }).map(function (r) { return r.team; }).indexOf(T) + 1 : null;
+    $("lede").textContent = me.driver + "'s best lap was " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) slower than " + s.pole.driver + "'s pole for " + s.pole.team +
+      (rv ? " and " + f(gapRival, 3) + " s slower than " + rv.driver + "'s " + s.rival + ". Against " + s.rival + " it lost " + f(d.straights, 2) + " s on the straights, " +
+        f(d.high, 2) + " s in high-speed corners, " + f(d.medium, 2) + " s in medium and " + f(d.low, 2) + " s in low-speed corners." : ".") +
+      " A year earlier the car was " + ord(s0.target_position) + " of " + s0.n_teams + ", " + f(me0.gap_pct, 2) + "% off pole.";
+    var tiles = [
+      { k: "Qualifying " + y, v: ord(s.target_position) + " / " + s.n_teams, d: "+" + f(me.gap_s, 3) + " s to pole (" + f(me.gap_pct, 2) + "%)", amr: true },
+      rv ? { k: "Gap to " + s.rival, v: "+" + f(gapRival, 3) + " s", d: f(100 * d.straights / gapRival, 0) + "% of it on the straights" } : null,
+      rp ? { k: "Race pace " + y, v: "+" + f(rp.gap_s, 2) + " s", d: "per lap to " + s.race_pace.team_pace[0].team + ", 90% CI " + f(rp.ci_lo, 2) + "–" + f(rp.ci_hi, 2) + " · " + ord(rpPos) + " of " + s.race_pace.team_pace.length } : null,
+      { k: "Qualifying " + y0, v: ord(s0.target_position) + " / " + s0.n_teams, d: "+" + f(me0.gap_s, 3) + " s to pole (" + f(me0.gap_pct, 2) + "%)" },
+    ].filter(Boolean);
+    $("tiles").innerHTML = tiles.map(function (t) {
+      return '<div class="tile"><span class="k">' + esc(t.k) + '</span><span class="v' + (t.amr ? " amr" : "") + '">' + esc(t.v) + '</span><span class="d">' + esc(t.d) + "</span></div>";
+    }).join("");
+    $("hero-note").textContent = "Sections: straights, and high-, medium- and low-speed corners (120 m either side of each apex). Seconds come from the timing channel on a shared distance grid and add up to the official gap. One lap per team; the season-level report carries the intervals.";
+  }
+
+  // ------------------------------------------------------------- season toggle
+  function segment(el, options, current, onPick) {
+    el.innerHTML = options.map(function (o) { return '<button type="button" data-v="' + o[0] + '" aria-pressed="' + (o[0] === current) + '">' + esc(o[1]) + "</button>"; }).join("");
+    el.querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        el.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+        onPick(b.getAttribute("data-v"));
+      });
+    });
+  }
+
+  // ------------------------------------------------------------- qualifying
+  function renderOrder(t) {
+    var s = S(), o = s.order.slice().reverse();
+    $("t-qualifying").innerHTML = (function () {
+      var me = row(null, T), mate = me.teammate;
+      return "Aston Martin qualified <strong>" + ord(s.target_position) + " of " + s.n_teams + " teams</strong>, " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) behind " + esc(s.pole.driver) +
+        " (" + esc(s.pole.team) + ")." + (mate ? " " + esc(mate) + " was " + f(me.teammate_time_s - me.lap_time_s, 3) + " s slower than " + esc(me.driver) + "." : "") +
+        (s.rival ? " The team directly ahead was " + esc(s.rival) + ", " + f(me.lap_time_s - row(null, s.rival).lap_time_s, 3) + " s faster." : "");
+    })();
+    plot("ch-order", [
+      { y: o.map(function (r) { return r.team; }), x: o.map(function (r) { return r.gap_s; }), type: "bar", orientation: "h",
+        marker: { color: o.map(function (r) { return teamColor(t, r.team, s.rival); }) }, width: 0.62,
+        customdata: o.map(function (r) { return [r.driver, r.gap_pct, r.lap_time_s]; }),
+        hovertemplate: "%{y} · %{customdata[0]}<br>+%{x:.3f} s (%{customdata[1]:.2f}%)<br>lap %{customdata[2]:.3f} s<extra></extra>",
+        text: o.map(function (r) { return "+" + f(r.gap_s, 3); }), textposition: "outside", cliponaxis: false, textfont: { family: t.mono, size: 11, color: t.ink2 } },
+      { y: o.map(function (r) { return r.team; }), x: o.map(function (r) { return r.teammate_time_s == null ? null : r.teammate_time_s - s.pole.lap_time_s; }), type: "scatter", mode: "markers",
+        marker: { size: 8, color: t.surface, line: { color: t.ink2, width: 1.5 } }, customdata: o.map(function (r) { return r.teammate; }),
+        hovertemplate: "%{y} · %{customdata}<br>+%{x:.3f} s<extra>teammate</extra>" },
+    ], layout(t, { margin: { l: 120, r: 56, t: 6, b: 40 }, xaxis: { title: { text: "gap to pole, s" }, rangemode: "tozero" }, yaxis: { tickfont: { family: t.body, size: 12 }, gridcolor: "rgba(0,0,0,0)" } }));
+  }
+
+  // ------------------------------------------------------------- sections
+  function renderSections(t) {
+    var s = S(), teams = Object.keys(s.sections), rate = state.unit === "pct";
+    var val = function (team, k) { return rate ? s.section_rates[team][k] : s.sections[team][k]; };
+    var traces = [];
+    SECS.forEach(function (k, i) {
+      var others = teams.filter(function (x) { return x !== T && x !== s.rival; });
+      traces.push({ x: others.map(function (x) { return val(x, k); }), y: others.map(function () { return SEC_LABEL[k]; }), type: "scatter", mode: "markers",
+        marker: { size: 10, color: t.field, line: { color: t.surface, width: 1.5 } }, text: others,
+        hovertemplate: "%{text}<br>%{x:.3f}" + (rate ? "%" : " s") + "<extra></extra>" });
+    });
+    [s.rival, T].filter(Boolean).forEach(function (team) {
+      traces.push({ x: SECS.map(function (k) { return val(team, k); }), y: SECS.map(function (k) { return SEC_LABEL[k]; }), type: "scatter", mode: "markers+text",
+        marker: { size: team === T ? 14 : 11, color: team === T ? t.amr : t.rival, line: { color: t.surface, width: 2 } },
+        text: SECS.map(function () { return team === T ? "AMR" : ""; }), textposition: "top center", textfont: { size: 10, color: t.ink2, family: t.mono },
+        hovertext: SECS.map(function () { return team; }), hovertemplate: "%{hovertext}<br>%{x:.3f}" + (rate ? "%" : " s") + "<extra></extra>" });
+    });
+    $("lg-rival").textContent = s.rival || "team ahead";
+    $("c-sections").textContent = rate ? "Loss rate, % of the pole lap's time in that section" : "Seconds lost to the pole lap (negative = faster than pole there)";
+    plot("ch-sections", traces, layout(t, { margin: { l: 150, r: 16, t: 6, b: 44 }, xaxis: { title: { text: rate ? "loss rate, %" : "time lost to pole, s" }, zeroline: true },
+      yaxis: { autorange: "reversed", tickfont: { family: t.body, size: 12 }, gridcolor: "rgba(0,0,0,0)" } }));
+
+    var me = row(null, T);
+    if (s.rival) {
+      var d = sectionDiff(state.season, T, s.rival), gap = me.lap_time_s - row(null, s.rival).lap_time_s;
+      $("c-rival-title").textContent = "Aston Martin vs " + s.rival + ", the team directly ahead";
+      plot("ch-rival", [{
+        type: "waterfall", orientation: "v", x: SECS.map(function (k) { return SEC_LABEL[k].replace(" corners", ""); }).concat(["Lap"]),
+        y: SECS.map(function (k) { return d[k]; }).concat([gap]), measure: SECS.map(function () { return "relative"; }).concat(["total"]),
+        text: SECS.map(function (k) { return sg(d[k], 3); }).concat([sg(gap, 3)]), textposition: "outside", cliponaxis: false,
+        textfont: { family: t.mono, size: 11, color: t.ink2 },
+        increasing: { marker: { color: t.loss } }, decreasing: { marker: { color: t.gain } }, totals: { marker: { color: t.amr } },
+        connector: { line: { color: t.rule, width: 1 } }, hovertemplate: "%{x}: %{y:+.3f} s<extra></extra>",
+      }], layout(t, { margin: { l: 56, r: 16, t: 24, b: 44 }, yaxis: { title: { text: "seconds (+ = Aston Martin slower)" } }, xaxis: { tickfont: { family: t.body, size: 12 } } }));
+    }
+    var r = s.section_rates[T], others = teams.filter(function (x) { return x !== T && x !== s.pole.team; });
+    var maxOtherSt = Math.max.apply(null, others.map(function (x) { return s.section_rates[x].straights; }));
+    var stWorst = others.filter(function (x) { return s.section_rates[x].straights === maxOtherSt; })[0];
+    $("t-sections").innerHTML = "Measured as a share of the pole lap's time in each part of the track, Aston Martin lost <strong>" + f(r.straights, 2) + "% on the straights</strong>, " +
+      f(r.high, 2) + "% in high-speed corners, " + f(r.medium, 2) + "% in medium and " + f(r.low, 2) + "% in low-speed corners. " +
+      "The highest straight-line rate of any other team was " + esc(stWorst) + "'s " + f(maxOtherSt, 2) + "%." +
+      (s.rival ? " Against " + esc(s.rival) + " the largest single difference was " + (function () {
+        var d = sectionDiff(state.season, T, s.rival), k = SECS.slice().sort(function (a, b) { return Math.abs(d[b]) - Math.abs(d[a]); })[0];
+        return "on the " + SEC_LABEL[k].toLowerCase() + " (" + sg(d[k], 3) + " s)";
+      })() + "." : "");
+  }
+
+  // ------------------------------------------------------------- the lap
+  function cornerTicks(s, t, y) {
+    // Corners within 300 m of the previous one step down a row (three rows) so numbers never overlap
+    var row = 0, prev = -1e9;
+    return s.corners.map(function (c) {
+      row = c.distance_m - prev < 300 ? (row + 1) % 3 : 0;
+      prev = c.distance_m;
+      return { x: c.distance_m, y: y, yref: "paper", text: c.label.replace("T", ""), showarrow: false, font: { size: 10, color: t.muted, family: t.mono },
+        yanchor: "bottom", yshift: 24 - 12 * row, hovertext: cname(c) };
+    });
+  }
+  function renderTrace(t) {
+    var s = S(), tr = s.traces, x = tr.distance_m, rv = tr.rival;
+    var series = [["pole", t.pole, tr.pole], ["rival", t.rival, rv], ["target", t.amr, tr.target]].filter(function (q) { return q[2]; });
+    var data = [];
+    series.forEach(function (q) {
+      data.push({ x: x, y: q[2].speed_kmh, type: "scatter", mode: "lines", line: { color: q[1], width: q[0] === "target" ? 2 : 1.4 },
+        name: q[2].driver + " (" + q[2].team + ")", hovertemplate: q[2].driver + " %{y:.0f} km/h · %{x:.0f} m<extra></extra>" });
+    });
+    series.filter(function (q) { return q[0] !== "pole"; }).forEach(function (q) {
+      data.push({ x: x, y: q[2].delta_s, yaxis: "y2", type: "scatter", mode: "lines", line: { color: q[1], width: q[0] === "target" ? 2 : 1.4 },
+        hovertemplate: q[2].driver + " +%{y:.3f} s vs pole · %{x:.0f} m<extra></extra>" });
+    });
+    var flagged = s.corners.filter(function (c) { return c.target_ok === false; });
+    var shapes = flagged.map(function (c) {
+      return { type: "rect", xref: "x", yref: "paper", x0: c.distance_m - 60, x1: c.distance_m + 60, y0: 0.34, y1: 1, fillcolor: t.flag, opacity: 0.14, line: { width: 0 } };
+    });
+    var ann = cornerTicks(s, t, 1.0).concat(flagged.map(function (c) {
+      return { x: c.distance_m + 70, y: 0.4, yref: "paper", xanchor: "left", text: "speed channel fault (" + esc(tr.target.driver) + ")", showarrow: false, font: { size: 10, color: t.flag } };
+    }));
+    plot("ch-trace", data, layout(t, { margin: { l: 56, r: 16, t: 44, b: 44 }, hovermode: "x",
+      xaxis: { title: { text: "distance from the timing line, m" }, range: [0, s.lap_length_m], anchor: "y2" },
+      yaxis: { domain: [0.36, 1], title: { text: "speed, km/h" } },
+      yaxis2: { domain: [0, 0.3], title: { text: "gap to pole, s" }, gridcolor: t.rule, zerolinecolor: t.muted, tickfont: { family: t.mono, size: 11 } },
+      shapes: shapes, annotations: ann }));
+    $("lg-trace").innerHTML = series.map(function (q) { return '<span><i style="background:' + q[1] + '"></i>' + esc(q[2].driver + ", " + q[2].team) + (q[0] === "pole" ? " (pole lap)" : "") + "</span>"; }).join("");
+    $("c-trace").textContent = "Speed (top) and cumulative time gap to the pole lap (bottom). Numbers along the top are turn numbers.";
+
+    // map
+    var m = s.track_map, L = m.target_loss_s_per_100m, lim = Math.max.apply(null, L.map(Math.abs));
+    // Corner labels pushed off the track along its normal, away from the circuit's centre
+    var n = m.x.length, cx = m.x.reduce(function (p, q) { return p + q; }, 0) / n, cy = m.y.reduce(function (p, q) { return p + q; }, 0) / n;
+    // A corner within 150 m of the first corner of the current label joins it ("16-17")
+    var groups = [];
+    s.corners.forEach(function (c) {
+      var g = groups[groups.length - 1];
+      if (g && c.distance_m - g[0].distance_m < 150) g.push(c); else groups.push([c]);
+    });
+    var lab = groups.map(function (g) {
+      var c = g[0], i = Math.min(Math.round(c.distance_m / (x[1] - x[0])), n - 1), a = (i - 2 + n) % n, b = (i + 2) % n;
+      var tx = m.x[b] - m.x[a], ty = m.y[b] - m.y[a], len = Math.hypot(tx, ty) || 1, nx = -ty / len, ny = tx / len;
+      if (nx * (m.x[i] - cx) + ny * (m.y[i] - cy) < 0) { nx = -nx; ny = -ny; }
+      return { x: m.x[i], y: m.y[i], text: g.map(function (q) { return q.label.replace("T", ""); }).join("–"), hovertext: g.map(cname).join(", "), showarrow: true, arrowhead: 0, arrowwidth: 1,
+        arrowcolor: t.muted, ax: nx * 22, ay: -ny * 22, font: { size: 11, color: t.ink2, family: t.mono } };
+    });
+    plot("ch-map", [
+      { x: m.x, y: m.y, type: "scatter", mode: "lines", line: { color: t.rule, width: 10 }, hoverinfo: "skip" },
+      { x: m.x, y: m.y, type: "scatter", mode: "markers", customdata: x,
+        marker: { size: 6, color: L, cmin: -lim, cmax: lim, colorscale: [[0, t.gain], [0.5, t.rule], [1, t.loss]],
+          colorbar: { title: { text: "s / 100 m", font: { size: 11 } }, thickness: 10, len: 0.6, tickfont: { family: t.mono, size: 10 }, outlinewidth: 0 } },
+        hovertemplate: "%{customdata:.0f} m · %{marker.color:+.3f} s per 100 m<extra></extra>" },
+    ], layout(t, { margin: { l: 8, r: 8, t: 8, b: 8 }, annotations: lab,
+      xaxis: { visible: false, scaleanchor: "y", scaleratio: 1 }, yaxis: { visible: false } }));
+
+    var nGain = L.filter(function (v) { return v < 0; }).length / L.length;
+    $("t-lap").innerHTML = esc(tr.target.driver) + "'s lap against " + esc(tr.pole.driver) + "'s pole" + (rv ? " and " + esc(rv.driver) + "'s " + esc(rv.team) : "") +
+      ". Where the bottom panel rises the car is losing time; Aston Martin was gaining on the pole lap over " + f(100 * nGain, 0) + "% of the track." +
+      (flagged.length ? " <span class=\"flag\">Shaded:</span> " + esc(tr.target.driver) + "'s speed channel at " + flagged.map(cname).join(", ") +
+        " holds a constant value at full throttle while GPS shows the car accelerating, so that dip is a data fault, not a lift; its time loss still comes from the timing channel and is unaffected." : "");
+  }
+
+  // ------------------------------------------------------------- corners
+  function renderCorners(t) {
+    var s = S(), C = s.corners, labels = C.map(cname);
+    var dv = C.map(function (c) { return c.target_ok === false || c.field_median_kmh == null ? null : c.target_kmh - c.field_median_kmh; });
+    var flagged = C.map(function (c) { return c.target_ok === false; });
+    plot("ch-cspeed", [
+      { y: labels, x: dv, type: "bar", orientation: "h", marker: { color: dv.map(function (v) { return v == null ? t.field : v < 0 ? t.loss : t.gain; }) },
+        customdata: C.map(function (c) { return [c.target_kmh, c.field_median_kmh, c.pole_kmh, c.speed_class]; }),
+        hovertemplate: "%{y} (%{customdata[3]})<br>AMR %{customdata[0]:.0f} · field %{customdata[1]:.0f} · pole %{customdata[2]:.0f} km/h<br>%{x:+.1f} km/h<extra></extra>" },
+      { y: labels.filter(function (_, i) { return flagged[i]; }), x: C.filter(function (c) { return c.target_ok === false; }).map(function () { return -6; }), base: 0, type: "bar", orientation: "h",
+        marker: { color: "rgba(0,0,0,0)", line: { color: t.flag, width: 1.5 }, pattern: { shape: "/", fgcolor: t.flag, size: 6 } },
+        hovertemplate: "%{y}: speed channel disagrees with GPS, not used<extra></extra>" },
+    ], layout(t, { margin: { l: 118, r: 16, t: 6, b: 44 }, barmode: "overlay", xaxis: { title: { text: "km/h vs field median" }, zeroline: true },
+      yaxis: { autorange: "reversed", tickfont: { family: t.body, size: 11 }, gridcolor: "rgba(0,0,0,0)" } }));
+
+    var phases = [["target_entry_s", "braking", 0.55], ["target_apex_s", "apex", 0.8], ["target_exit_s", "exit", 1]];
+    plot("ch-ctime", phases.map(function (p) {
+      return { y: labels, x: C.map(function (c) { return c[p[0]]; }), type: "bar", orientation: "h", name: p[1],
+        marker: { color: t.amr, opacity: p[2], line: { color: t.surface, width: 1 } }, hovertemplate: "%{y} " + p[1] + ": %{x:+.3f} s<extra></extra>" };
+    }), layout(t, { margin: { l: 118, r: 16, t: 6, b: 44 }, barmode: "relative", showlegend: true,
+      legend: { orientation: "h", y: -0.14, x: 0, font: { size: 11 } }, xaxis: { title: { text: "seconds lost to pole (+)" }, zeroline: true },
+      yaxis: { autorange: "reversed", tickfont: { family: t.body, size: 11 }, gridcolor: "rgba(0,0,0,0)" } }));
+
+    var teams = s.order.map(function (r) { return r.team; }).filter(function (k) { return s.corner_time_s[k]; });
+    var z = teams.map(function (k) { return s.corner_time_s[k]; });
+    var zmax = Math.max.apply(null, z.map(function (r) { return Math.max.apply(null, r.map(Math.abs)); }));
+    plot("ch-heat", [{ z: z, x: C.map(function (c) { return c.label; }), y: teams, type: "heatmap", zmid: 0, zmin: -zmax, zmax: zmax,
+      colorscale: [[0, t.gain], [0.5, t.surface], [1, t.loss]], xgap: 2, ygap: 2,
+      customdata: teams.map(function () { return C.map(cname); }),
+      colorbar: { title: { text: "s", font: { size: 11 } }, thickness: 10, tickfont: { family: t.mono, size: 10 }, outlinewidth: 0 },
+      hovertemplate: "%{y} · %{customdata}<br>%{z:+.3f} s<extra></extra>" }],
+      layout(t, { margin: { l: 120, r: 16, t: 6, b: 40 }, xaxis: { tickfont: { family: t.mono, size: 10 }, gridcolor: "rgba(0,0,0,0)" },
+        yaxis: { autorange: "reversed", tickfont: { family: t.body, size: 11 }, gridcolor: "rgba(0,0,0,0)" } }));
+
+    var byClass = {};
+    C.forEach(function (c, i) { if (dv[i] != null) (byClass[c.speed_class] = byClass[c.speed_class] || []).push(dv[i]); });
+    var avg = function (a) { return a && a.length ? a.reduce(function (p, q) { return p + q; }, 0) / a.length : null; };
+    var worst = C.slice().sort(function (a, b) { return b.target_time_s - a.target_time_s; }).slice(0, 3);
+    var entry = C.reduce(function (p, c) { return p + c.target_entry_s; }, 0), apex = C.reduce(function (p, c) { return p + c.target_apex_s; }, 0), exit = C.reduce(function (p, c) { return p + c.target_exit_s; }, 0);
+    $("t-corners").innerHTML = "Against the median of the other teams' best laps, Aston Martin's minimum speed was on average " +
+      ["high", "medium", "low"].filter(function (k) { return byClass[k]; }).map(function (k) { return "<strong>" + sg(avg(byClass[k]), 1) + " km/h in " + k + "-speed corners</strong>"; }).join(", ") +
+      ". The corners that cost most time to the pole lap were " + worst.map(function (c) { return cname(c) + " (" + f(c.target_time_s, 2) + " s)"; }).join(", ") +
+      ". Over all corners the loss splits " + f(entry, 2) + " s braking, " + f(apex, 2) + " s apex and " + f(exit, 2) + " s exit. Braking-phase losses after a straight partly carry over the lower speed the car arrives with.";
+  }
+
+  // ------------------------------------------------------------- straights
+  function renderStraights(t) {
+    var s = S(), box = $("straight-figs");
+    box.innerHTML = s.straights.map(function (st, i) {
+      return '<figure class="fig"><figcaption><strong>' + esc(st.name) + "</strong><span>" + f(st.start_m, 0) + "–" + f(st.end_m, 0) + " m from the line · every team's best lap</span></figcaption>" +
+        '<div class="chart" id="ch-st-' + i + '" role="img" aria-label="Speed along ' + esc(st.name) + '"></div></figure>';
+    }).join("");
+    s.straights.forEach(function (st, i) {
+      var teams = Object.keys(st.teams).sort(function (a, b) { return (a === T) - (b === T) || (a === s.rival) - (b === s.rival); });
+      plot("ch-st-" + i, teams.map(function (k) {
+        var v = st.teams[k];
+        return { x: st.distance_m, y: v.speed_kmh, type: "scatter", mode: "lines", line: { color: teamColor(t, k, s.rival), width: k === T ? 2.6 : k === s.rival ? 1.8 : 1.1 },
+          opacity: k === T || k === s.rival ? 1 : 0.85, hovertemplate: esc(k) + " %{y:.0f} km/h · %{x:.0f} m<extra></extra>" };
+      }), layout(t, { margin: { l: 52, r: 16, t: 8, b: 44 }, hovermode: "closest", xaxis: { title: { text: "distance from the timing line, m" } }, yaxis: { title: { text: "km/h" } } }));
+    });
+    var teams = s.order.map(function (r) { return r.team; }).filter(function (k) { return s.straights.length && s.straights[0].teams[k]; });
+    var pal = [t.ink2, t.muted];
+    plot("ch-ftloss", s.straights.map(function (st, i) {
+      return { x: teams, y: teams.map(function (k) { return st.teams[k].full_throttle_loss_kmh; }), type: "bar", name: st.name,
+        marker: { color: teams.map(function (k) { return k === T ? t.amr : pal[i % 2]; }), opacity: i ? 0.55 : 1, line: { color: t.surface, width: 1 } },
+        hovertemplate: "%{x} · " + esc(st.name) + "<br>%{y:.1f} km/h<extra></extra>" };
+    }), layout(t, { margin: { l: 52, r: 16, t: 8, b: 80 }, barmode: "group", showlegend: true, legend: { orientation: "h", y: 1.12, x: 0, font: { size: 11 } },
+      xaxis: { tickangle: -30, tickfont: { family: t.body, size: 11 } }, yaxis: { title: { text: "km/h" } } }));
+
+    var parts = s.straights.map(function (st) {
+      var me = st.teams[T], others = Object.keys(st.teams).filter(function (k) { return k !== T; });
+      var med = function (key) { var a = others.map(function (k) { return st.teams[k][key]; }).sort(function (p, q) { return p - q; }); var n = a.length; return n % 2 ? a[(n - 1) / 2] : (a[n / 2 - 1] + a[n / 2]) / 2; };
+      var rank = others.filter(function (k) { return st.teams[k].full_throttle_loss_kmh > me.full_throttle_loss_kmh; }).length + 1;
+      return "On the <strong>" + esc(st.name) + "</strong> Aston Martin arrived " + cmp(me.entry_kmh - med("entry_kmh"), "faster", "slower") + " than the field median, peaked " +
+        cmp(me.peak_kmh - med("peak_kmh"), "higher", "lower") + " and finished " + cmp(me.end_kmh - med("end_kmh"), "higher", "lower") + "; at full throttle it fell " + f(me.full_throttle_loss_kmh, 1) +
+        " km/h below its own peak (" + (rank === 1 ? "the most of any car" : ord(rank) + " most") + "; field median " + f(med("full_throttle_loss_kmh"), 1) + " km/h).";
+    });
+    var anyClip = s.straights.some(function (st) { return Object.keys(st.teams).some(function (k) { return st.teams[k].full_throttle_loss_kmh > 8; }); });
+    $("t-straights").innerHTML = parts.join(" ") + (anyClip ?
+      " Speed falling at full throttle happens to most 2026 cars somewhere on the lap: when deployment ends or the car harvests, drive power drops below what drag absorbs. Where each team takes that loss is an energy-strategy choice, so the straight-by-straight pattern says as much about strategy as about the car." :
+      " No car loses more than a few km/h at full throttle: speed flattens toward the drag limit but does not fall, as expected with constant drive power.");
+  }
+
+  // ------------------------------------------------------------- grip vs speed
+  function renderGrip(t) {
+    var s = S(), g = s.grip.filter(function (r) { return r.grip_high_g != null && r.straight_speed_delta_kmh != null; });
+    plot("ch-grip", [{
+      x: g.map(function (r) { return r.straight_speed_delta_kmh; }), y: g.map(function (r) { return r.grip_high_g; }), type: "scatter", mode: "markers+text",
+      text: g.map(function (r) { return r.team === T ? "Aston Martin" : r.team.replace(" F1 Team", "").replace("Red Bull Racing", "Red Bull"); }),
+      textposition: g.map(function (r) { return r.team === T ? "bottom right" : "top center"; }), textfont: { size: 10, color: t.ink2 },
+      marker: { size: g.map(function (r) { return r.team === T ? 14 : 10; }), color: g.map(function (r) { return teamColor(t, r.team, s.rival); }), line: { color: t.surface, width: 2 } },
+      error_y: { type: "data", symmetric: false, array: g.map(function (r) { return r.grip_high_hi - r.grip_high_g; }), arrayminus: g.map(function (r) { return r.grip_high_g - r.grip_high_lo; }), color: t.rule, thickness: 1, width: 0 },
+      customdata: g.map(function (r) { return [r.team, r.grip_high_lo, r.grip_high_hi, r.grip_low_g]; }),
+      hovertemplate: "%{customdata[0]}<br>high-speed grip %{y:.2f} g (90% %{customdata[1]:.2f}–%{customdata[2]:.2f})<br>low-speed grip %{customdata[3]:.2f} g<br>straight-line %{x:+.1f} km/h<extra></extra>",
+    }], layout(t, { margin: { l: 56, r: 16, t: 8, b: 48 }, xaxis: { title: { text: "peak straight-line speed vs other teams' median, km/h" }, zeroline: true },
+      // Axis covers the estimates with room; a few upper interval ends run off the top
+      yaxis: { title: { text: "grip at high dynamic pressure, g" }, range: [Math.min.apply(null, g.map(function (r) { return r.grip_high_lo; })) - 0.1,
+        Math.max.apply(null, g.map(function (r) { return r.grip_high_g; })) + 0.9] } }));
+    var me = g.filter(function (r) { return r.team === T; })[0];
+    var rankHigh = g.filter(function (r) { return r.grip_high_g < me.grip_high_g; }).length;
+    var rankSpeed = g.filter(function (r) { return r.straight_speed_delta_kmh < me.straight_speed_delta_kmh; }).length;
+    var hs = s.corners.filter(function (c) { return c.speed_class === "high" && c.target_ok !== false && c.field_median_kmh != null; });
+    var hsDown = hs.filter(function (c) { return c.target_kmh < c.field_median_kmh; }).length;
+    var hsAvg = hs.length ? hs.reduce(function (p, c) { return p + c.target_kmh - c.field_median_kmh; }, 0) / hs.length : null;
+    $("t-car").innerHTML = me ? "Aston Martin's high-speed grip estimate is " + f(me.grip_high_g, 2) + " g (" + (rankHigh === 0 ? "the lowest point estimate of " + g.length + " teams" : ord(g.length - rankHigh) + " of " + g.length) +
+      "), but the intervals overlap widely: one lap per team and a handful of fast corners. The corner minimum speeds are the firmer evidence: " + hsDown + " of " + hs.length +
+      " high-speed corners slower than the field median, by " + f(-hsAvg, 1) + " km/h on average. Its peak straight-line speed was " + sg(me.straight_speed_delta_kmh, 1) + " km/h against the other teams' median (" +
+      (rankSpeed === 0 ? "the slowest" : ord(g.length - rankSpeed) + " of " + g.length) + "). " +
+      (rankSpeed === 0 && hsAvg < -5 ? "<strong>A car trimmed for low drag trades high-speed grip for straight-line speed; this one is short of both</strong>, which points at overall aerodynamic efficiency or drive power rather than a set-up choice." : "") : "";
+  }
+
+  // ------------------------------------------------------------- race
+  function renderRace(t) {
+    var s = S(), rp = s.race_pace;
+    if (!rp || !rp.team_pace) {
+      $("race-fig").hidden = true;
+      $("t-race").textContent = (s.warnings || []).filter(function (w) { return /race pace/.test(w); })[0] ? "Race pace is not estimated for " + state.season + ": the race was wet, with too little green-flag running on slicks for the model." : "No race-pace estimate for this season.";
+      return;
+    }
+    $("race-fig").hidden = false;
+    var tp = rp.team_pace.slice().sort(function (a, b) { return b.gap_s - a.gap_s; });
+    plot("ch-race", [{ y: tp.map(function (r) { return r.team; }), x: tp.map(function (r) { return r.gap_s; }), type: "scatter", mode: "markers",
+      marker: { size: tp.map(function (r) { return r.team === T ? 13 : 10; }), color: tp.map(function (r) { return teamColor(t, r.team, s.rival); }), line: { color: t.surface, width: 2 } },
+      error_x: { type: "data", symmetric: false, array: tp.map(function (r) { return r.ci_hi - r.gap_s; }), arrayminus: tp.map(function (r) { return r.gap_s - r.ci_lo; }), color: t.muted, thickness: 1.2, width: 4 },
+      customdata: tp.map(function (r) { return [r.ci_lo, r.ci_hi]; }), hovertemplate: "%{y}<br>+%{x:.2f} s/lap (90% %{customdata[0]:.2f}–%{customdata[1]:.2f})<extra></extra>" }],
+      layout(t, { margin: { l: 120, r: 16, t: 6, b: 44 }, xaxis: { title: { text: "gap to " + tp[tp.length - 1].team + ", s per lap" }, rangemode: "tozero" }, yaxis: { tickfont: { family: t.body, size: 12 }, gridcolor: "rgba(0,0,0,0)" } }));
+    var me = rp.team_pace.filter(function (r) { return r.team === T; })[0], q = row(null, T);
+    var ahead = tp[tp.map(function (r) { return r.team; }).indexOf(T) + 1];
+    $("t-race").innerHTML = "On race pace Aston Martin was <strong>" + f(me.gap_s, 2) + " s per lap</strong> (90% interval " + f(me.ci_lo, 2) + "–" + f(me.ci_hi, 2) + ") slower than " + esc(tp[tp.length - 1].team) +
+      ", about " + f(100 * me.gap_s / me.pace_s, 1) + "% of a lap, against " + f(q.gap_pct, 1) + "% in qualifying" + (ahead ? ", and " + f(me.gap_s - ahead.gap_s, 2) + " s per lap slower than the next team, " + esc(ahead.team) : "") +
+      ". The model removes fuel burn (laps get " + f(-rp.fuel_s_per_lap, 3) + " s faster per lap as fuel burns) and tyre wear by compound, over " + rp.n_laps + " green-flag laps.";
+  }
+
+  // ------------------------------------------------------------- context
+  function renderContext(t) {
+    var y1 = YEARS[YEARS.length - 1], y0 = YEARS[0];
+    // Silverstone solid, season average as an outline of the same colour; 2025 grey, 2026 green
+    var groups = [[y0 + " Silverstone", S(y0).section_rates[T], true, t.field], [y0 + " season average", seasonRates(y0), false, t.field],
+                  [y1 + " Silverstone", S(y1).section_rates[T], true, t.amr], [y1 + " season average", seasonRates(y1), false, t.amr]].filter(function (g) { return g[1]; });
+    plot("ch-compare", groups.map(function (g) {
+      return { x: SECS.map(function (k) { return SEC_LABEL[k].replace(" corners", ""); }), y: SECS.map(function (k) { return g[1][k]; }), type: "bar", name: g[0],
+        marker: { color: g[2] ? g[3] : "rgba(0,0,0,0)", line: { color: g[3], width: g[2] ? 0 : 1.6 } }, hovertemplate: g[0] + " · %{x}: %{y:.2f}%<extra></extra>" };
+    }), layout(t, { margin: { l: 52, r: 16, t: 8, b: 44 }, barmode: "group", bargap: 0.25, bargroupgap: 0.08, yaxis: { title: { text: "loss rate, %" } } }));
+    $("lg-compare").innerHTML = groups.map(function (g) {
+      return '<span><i style="' + (g[2] ? "background:" + g[3] : "border:1.6px solid " + g[3] + ";height:9px;width:12px") + '"></i>' + esc(g[0]) + "</span>";
+    }).join("");
+
+    var ctx = R.context, data = [];
+    YEARS.forEach(function (y, i) {
+      var c = ctx.filter(function (r) { return String(r.season) === y; });
+      data.push({ x: c.map(function (r) { return r.round; }), y: c.map(function (r) { return r.gap_pct; }), type: "scatter", mode: "lines+markers", name: y,
+        line: { color: i ? t.amr : t.field, width: 1.6 }, marker: { size: c.map(function (r) { return r.event === R.event ? 13 : 6; }), color: i ? t.amr : t.field, line: { color: t.surface, width: 1.5 } },
+        customdata: c.map(function (r) { return [r.event, r.position, r.n_teams]; }),
+        hovertemplate: y + " · %{customdata[0]}<br>%{y:.2f}% · %{customdata[1]} of %{customdata[2]}<extra></extra>" });
+    });
+    var ann = ctx.filter(function (r) { return r.event === R.event; }).map(function (r) {
+      return { x: r.round, y: r.gap_pct, text: "Silverstone " + r.season, showarrow: true, arrowhead: 0, ax: 0, ay: -26, font: { size: 11, color: t.ink2 }, arrowcolor: t.muted };
+    });
+    plot("ch-context", data, layout(t, { margin: { l: 48, r: 16, t: 8, b: 44 }, showlegend: true, legend: { orientation: "h", y: 1.14, x: 0, font: { size: 11 } },
+      xaxis: { title: { text: "round" }, dtick: 2 }, yaxis: { title: { text: "gap to pole, %" }, rangemode: "tozero" }, annotations: ann }));
+
+    var rank = function (y) {
+      var c = ctx.filter(function (r) { return String(r.season) === y; }).sort(function (a, b) { return b.gap_pct - a.gap_pct; });
+      return { i: c.map(function (r) { return r.event; }).indexOf(R.event) + 1, n: c.length };
+    };
+    var r1 = rank(y1), r0 = rank(y0), a1 = S(y1).section_rates[T], b1 = seasonRates(y1);
+    var worstVs = b1 ? SECS.slice().sort(function (p, q) { return (a1[q] - b1[q]) - (a1[p] - b1[p]); })[0] : null;
+    var up = S(y0).declared_upgrades || [], ut = S(y0).upgrade_test;
+    var allWorse = b1 && SECS.every(function (k) { return a1[k] > b1[k]; });
+    $("t-context").innerHTML = "In " + y1 + " Silverstone was Aston Martin's " + rankPhrase(r1) + " qualifying gap of " + r1.n + " events; in " + y0 + " its " + rankPhrase(r0) + " of " + r0.n + ". " +
+      (b1 ? "Against its own " + y1 + " average the car lost more at Silverstone " + (allWorse ? "in every section" : "in most sections") + ", most of all in the " + SEC_LABEL[worstVs].toLowerCase() + " (" + f(a1[worstVs], 2) + "% against " + f(b1[worstVs], 2) +
+        "%). " + f(100 * S(y1).track.high_speed_share, 0) + "% of the pole lap here is spent in high-speed corners, the " + (function () {
+        var c = ctx.filter(function (r) { return String(r.season) === y1 && r.track_x != null; }).sort(function (p, q) { return q.track_x - p.track_x; });
+        var i = c.map(function (r) { return r.event; }).indexOf(R.event) + 1;
+        return (i === 1 ? "highest" : ord(i) + "-highest") + " share of the " + c.length + " " + y1 + " events analysed";
+      })() + ". " : "") +
+      (up.length ? "Aston Martin brought a declared " + esc(up[0].major_performance_upgrade) + " upgrade to Silverstone in " + y0 + " (" + esc(up[0].components) + ")" +
+        (ut ? "; the season difference-in-differences test finds no measurable change in its gap afterwards (" + sg(ut.effect_pct, 2) + "%, placebo p = " + f(ut.team_placebo_p, 2) + "; the test could detect about " + f(ut.mde_pct, 1) + "% or more)." : ".") : "");
+  }
+  function seasonRates(y) {
+    var r = (R.season_rates || {})[y]; if (!r) return null;
+    var out = {}; r.sections.forEach(function (k, i) { out[k] = r.rate_pct[i]; }); return out;
+  }
+
+  // ------------------------------------------------------------- notes
+  function renderNotes() {
+    var flags = [];
+    YEARS.forEach(function (y) { S(y).flagged_corner_speeds.forEach(function (q) { flags.push(y + " " + q.driver + " (" + q.team + ") at " + q.corner + (q.name ? " " + q.name : "") + ": wheel " + f(q.wheel_kmh, 0) + " vs GPS " + f(q.gps_kmh, 0) + " km/h"); }); });
+    $("m-flags").textContent = "Each corner's minimum speed is checked against GPS-derived speed, relative to the field's typical difference at that corner; misses beyond 15 km/h are not used. Flagged: " + (flags.length ? flags.join("; ") : "none") + ".";
+    var w = [];
+    YEARS.forEach(function (y) {
+      (S(y).warnings || []).forEach(function (x) {
+        w.push(y + ": " + x.replace(/\{'([a-z_]+)': ([-0-9.]+)\}/g, function (_, k, v) { return k.replace(/_/g, " ") + " " + f(+v, 1); }));
+      });
+    });
+    $("m-warnings").textContent = "Pipeline notes: " + (w.length ? w.join("; ") : "none") + ".";
+  }
+
+  function renderSeason() {
+    var t = theme();
+    $("season-note").textContent = "Pole: " + S().pole.driver + " (" + S().pole.team + "), " + f(S().pole.lap_time_s, 3) + " s · " + S().regulations.mass_kg + " kg model mass (minimum plus qualifying fuel) · " + (S().regulations.has_drs ? "DRS" : "no DRS");
+    renderOrder(t); renderSections(t); renderTrace(t); renderCorners(t); renderStraights(t); renderGrip(t); renderRace(t);
+  }
+  function renderAll() { hero(); renderSeason(); renderContext(theme()); renderNotes(); syncBar(); }
+  function syncBar() {
+    var mh = document.querySelector(".masthead");
+    var h = getComputedStyle(mh).position === "sticky" ? mh.offsetHeight : 0;
+    document.querySelector(".season-bar").style.top = "calc(env(safe-area-inset-top, 0px) + " + h + "px)";
+    document.documentElement.style.scrollPaddingTop = (h + document.querySelector(".season-bar").offsetHeight + 8) + "px";
+  }
+  window.addEventListener("resize", syncBar);
+
+  segment($("season-seg"), YEARS.map(function (y) { return [y, y]; }), state.season, function (v) { state.season = v; renderSeason(); });
+  segment($("unit-seg"), [["s", "Seconds"], ["pct", "Loss rate"]], state.unit, function (v) { state.unit = v; renderSections(theme()); });
+  if (window.Plotly) renderAll(); else window.addEventListener("load", renderAll);
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () { renderSeason(); renderContext(theme()); });
+  new MutationObserver(function () { renderSeason(); renderContext(theme()); }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+})();
+</script>

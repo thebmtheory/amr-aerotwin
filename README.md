@@ -7,6 +7,8 @@ interactive report.
 
 **Read first:** the [technical note](docs/technical_note.md), regenerated from the results on every run, and the report site (`make report && make serve`, then open <http://localhost:8765>).
 
+**Single-event report:** [Aston Martin at Silverstone](reports/british-grand-prix.html), every team at the 2025 and 2026 British Grands Prix: qualifying order, where the time goes by section and corner, the straights, grip vs straight-line speed, race pace and season context. `make event-report EVENT="British Grand Prix"` rebuilds it, or any other event.
+
 ## Main findings
 
 - **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent in each part of the lap, it loses about 3.8% on the straights against at most 1.7% for any other team (Cadillac, which is just as slow over a lap): 2.2 times as much, 90% interval 1.8 to 2.9. Every other team more than 1% off pole, and Aston Martin in 2025, loses much less per second on the straights than in the corners.
@@ -33,6 +35,7 @@ Exact figures and 90% intervals are in the technical note, which is generated fr
 | Season | `modeling/season.py` | Supertimes, car vs driver variance, Bayesian changepoints, upgrade difference-in-differences with placebo tests |
 | Energy | `modeling/energy.py` | 2026 full-throttle speed loss (clipping) |
 | Report | `report/` | Static site (Plotly) and a JavaScript port of the lap simulator for the in-browser setup sandbox |
+| Event report | `report/event_report.py` | One circuit, every team: section and corner times, corner speeds checked against GPS, full-throttle speed loss on the straights |
 
 ## Run it
 
