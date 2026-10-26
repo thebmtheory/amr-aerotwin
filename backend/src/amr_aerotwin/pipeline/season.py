@@ -662,6 +662,13 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
     drivers = drivers[drivers["passed_checks"].astype(bool)]
     result: dict[str, Any] = {"n_events": len(events),
                               "wet_events_excluded": [f"{e['event']} {e['season']}" for e in wet.values()]}
+    # Events where the telemetry reference (fastest lap that passes every check) is not the
+    # fastest lap of qualifying, because that lap's data failed a check
+    result["reference_not_fastest"] = [
+        {"season": e["season"], "event": e["event"], "reference": e["pole"]["driver"], "fastest": e["fastest_lap"]["driver"],
+         "gap_s": _r(e["pole"]["lap_time_s"] - e["fastest_lap"]["lap_time_s"], 3)}
+        for e in sorted(events.values(), key=lambda e: (e["season"], e["round"]))
+        if e.get("fastest_lap") and e["pole"]["driver"] != e["fastest_lap"]["driver"]]
 
     # Supertimes and AMR changepoints
     # Pace analyses use official timing for every driver, not only laps with usable telemetry
@@ -749,6 +756,8 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
     # Corner model, team deficits, wind, Shapley
     corners = tables["corners"]
     corners = corners[corners["geometry_ok"].astype(bool) & corners["team"].notna()]
+    if "speed_ok" in corners:  # minimum speeds the GPS cross-check rejects (stuck speed channel)
+        corners = corners[corners["speed_ok"].fillna(True).astype(bool)]
     corners = corners.merge(drivers[["season", "round", "driver"]], on=["season", "round", "driver"])
     corners["circuit"] = corners["circuit_corner"].str.rsplit("-", n=1).str[0]
     sims = geometry_sim_speeds(events)
@@ -769,6 +778,7 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         "n_circuits": int(corners["circuit"].nunique()), "cv_groups": "circuit",
         "physics_params": {"a_mu_g": _r(rep.physics_params[0], 3), "b": _r(rep.physics_params[1], 6)},
         "n_rows": len(corners), "n_events": int(corners["event_key"].nunique()),
+        "n_corners": int(corners[["event_key", "corner_key"]].drop_duplicates().shape[0]),
         "share_with_sim": _r(float(corners["v_sim_kmh"].notna().mean()) if "v_sim_kmh" in corners else 0.0, 3),
         "scatter": _r(rep.oof.sample(min(3000, len(rep.oof)), random_state=0)[
             ["v_min_kmh", "pred_steady", "pred_physics", "pred_ml", "pred_hybrid", "speed_class", "team", "season"]].to_dict("list"), 1),

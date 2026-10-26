@@ -12,7 +12,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from amr_aerotwin.domain import AlignedLap
-from amr_aerotwin.physics.kinematics import gps_spline_kinematics
+from amr_aerotwin.physics.dynamics import VehicleState
+from amr_aerotwin.physics.kinematics import corner_windows, gps_spline_kinematics
 
 LAP_CHECKS: dict[str, tuple[str, float, float]] = {
     # metric: (description, lower bound, upper bound)
@@ -156,3 +157,42 @@ def expected_turn_count(x_m: np.ndarray, y_m: np.ndarray) -> int:
     """Net number of turns of a closed path, from its unwrapped heading (rounded)."""
     heading = np.unwrap(np.arctan2(np.diff(np.append(y_m, y_m[0])), np.diff(np.append(x_m, x_m[0]))))
     return int(np.rint((heading[-1] - heading[0]) / (2 * np.pi)))
+
+CORNER_WINDOW_M = 60.0
+# A corner's minimum speed is used only when the wheel-speed channel and GPS-derived speed
+# agree on it. The smoothed GPS path reads low in fast corners for every car, so each car's
+# wheel-minus-GPS difference is compared with the field's median at that corner; a stuck or
+# stepping speed channel (2026 British GP: STR at Aintree) misses by 20 km/h or more. On the
+# clean laps at Silverstone the residual stays within +-14 km/h.
+WHEEL_GPS_TOL_KMH = 15.0
+
+
+def corner_min_speeds(state: VehicleState, corner_s: np.ndarray) -> list[dict[str, float]]:
+    """Minimum speed in +-60 m of each corner from the wheel-speed channel and from GPS.
+
+    GPS speed comes from the same time-domain spline of raw fixes used for curvature, so it
+    is independent of the car-data stream. See `flag_corner_speeds` for the check.
+    """
+    lap = state.lap
+    out = []
+    # Disjoint windows: two corners closer than 120 m (Vale, T16-T17) do not share a minimum
+    for win in corner_windows(lap.distance_m, corner_s, lap.lap_length_m, CORNER_WINDOW_M):
+        v_wheel = float(np.min(state.speed_smooth_ms[win]) * 3.6)
+        if len(lap.gps_time_s) > 50:
+            _, v_gps = gps_spline_kinematics(lap.gps_time_s, lap.gps_x_m, lap.gps_y_m, lap.meta.lap_time_s, lap.time_s[win])
+            g = float(np.min(v_gps) * 3.6)
+        else:
+            g = float("nan")
+        out.append({"wheel_kmh": v_wheel, "gps_kmh": g})
+    return out
+
+
+def flag_corner_speeds(vmin: dict[str, list[dict[str, float]]]) -> None:
+    """Set `ok` on every (car, corner): wheel-minus-GPS within WHEEL_GPS_TOL_KMH of the field median."""
+    n = len(next(iter(vmin.values())))
+    for i in range(n):
+        diffs = {t: v[i]["wheel_kmh"] - v[i]["gps_kmh"] for t, v in vmin.items()}
+        med = float(np.nanmedian(list(diffs.values())))
+        for t, v in vmin.items():
+            v[i]["residual_kmh"] = diffs[t] - med
+            v[i]["ok"] = bool(np.isfinite(diffs[t]) and abs(diffs[t] - med) <= WHEEL_GPS_TOL_KMH)

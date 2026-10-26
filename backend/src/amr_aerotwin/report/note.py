@@ -77,10 +77,10 @@ def build_note(season_json: Path, out_md: Path) -> Path:
     front_sentence = "".join(
         f"; {t} is a front-runner that loses more on the straights ({_f(sec('2026', t, 'straights')['v'], 2)}%) than in the corners "
         f"({_f(v['corner_rate_pct'], 2)}%), at a much lower level than Aston Martin" for t, v in front.items())
-    r25 = [v["straight_to_corner_ratio"] for v in others("2025")]
+    r25 = [v["straight_to_corner_ratio"] for v in others("2025", off_pace=True)]
     a25r = a25.get("straight_to_corner_ratio", float("nan"))
-    field25 = (f"in line with the other teams ({_f(min(r25), 2)} to {_f(max(r25), 2)})" if r25 and min(r25) <= a25r <= max(r25)
-               else f"outside the other teams' range ({_f(min(r25), 2)} to {_f(max(r25), 2)})" if r25 else "")
+    where25 = "below" if r25 and a25r < min(r25) else "above" if r25 and a25r > max(r25) else "in line with"
+    field25 = f"{where25} the teams at least 1% off pole ({_f(min(r25), 2)} to {_f(max(r25), 2)})" if r25 else ""
     sp26 = s.get("straight_profile", {}).get("2026", {}).get(TARGET, {})
     sp25 = s.get("straight_profile", {}).get("2025", {}).get(TARGET, {})
     b0 = (sp26.get("bins") or [{}])[0]
@@ -107,14 +107,14 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         "",
         "*Generated from `data/processed/season.json` by `aerotwin report`. Public data only; not affiliated with Aston Martin Aramco F1 Team. "
         "Intervals are 90% bootstrap intervals over events unless stated, widened for small samples (expanded percentile bootstrap: with five to ten events "
-        "plain percentile intervals cover only about 80%).*",
+        "plain percentile intervals cover only about 80–85%).*",
         "",
         "## Findings",
         "",
         f"1. **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Loss rate = time lost to the pole lap "
         f"in a section ÷ the pole lap's time there, summed over events. Aston Martin's 2026 straight-line rate is {_f(st26.get('v'), 2)}% "
         f"[{_f(st26.get('lo'), 2)}, {_f(st26.get('hi'), 2)}] against {_f(a26.get('corner_rate_pct'), 2)}% in the corners, a ratio of "
-        f"{_f(a26.get('straight_to_corner_ratio'), 2)} [{ci(a26.get('straight_to_corner_ci90'), 2)}]. Every other team with five or more events has a straight-line rate between "
+        f"{_f(a26.get('straight_to_corner_ratio'), 2)} [{ci(a26.get('straight_to_corner_ci90'), 2)}]. Every other team with five or more events (its own pole laps count as zero loss) has a straight-line rate between "
         f"{_f(min(o_st), 2)}% and {_f(max(o_st), 2)}%; Aston Martin's is {_f(vf.get('ratio'), 2)} times the highest of them ({vf.get('next_team', 'n/a')}) "
         f"[{ci(vf.get('ratio_ci90'), 2)}, the maximum over rivals taken inside each bootstrap draw], so \"twice\" is the central estimate, not a lower bound "
         f"({_f(100 * (vf.get('p_ratio_above_2') or 0), 0)}% of bootstrap draws exceed 2). Teams at least 1% off pole over a lap have straights-to-corners ratios between "
@@ -128,10 +128,10 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"in the second half [{ci(sp26.get('second_half_ci90'))}], at full throttle, on {sp26.get('n_straights_losing_late')} of {sp26.get('n_straights')} main straights at {sp26.get('n_events')} events "
         f"(leaving out any one event: {ci(sorted(sp26.get('second_half_loo_range') or []))}). A late loss alone is not unusual: {late_team} loses {_f(late_kmh, 1)} km/h in the second half too, the next largest, "
         f"and several teams show smaller ones in both seasons. What sets Aston Martin apart is the size of both parts: no other team starts the straights more than {_f(max_start, 1)} km/h off the field. "
-        "The shape does not identify the cause: a point-mass simulation reproduces it with extra drag alone, and energy deployment ending earlier or harvesting at "
-        "full throttle fit it as well. "
-        f"In 2025 the same second-half change was {_pm(sp25.get('second_half_kmh'), 1)} km/h [{ci(sp25.get('second_half_ci90'))}]. Main straights cost {_f(sp26.get('time_total_s'), 2)} s per lap "
-        f"[{ci(sp26.get('time_total_ci90'), 2)}] in 2026.",
+        f"The gap reaches {_f(-((sp26.get('bins') or [{}])[-1].get('gap_kmh') or 0), 1)} km/h at the braking point. Extra drag, deployment ending earlier and harvesting at full "
+        "throttle can all open a gap along a straight; public timing data cannot tell them apart. "
+        f"In 2025 the same second-half change was {_pm(sp25.get('second_half_kmh'), 1)} km/h [{ci(sp25.get('second_half_ci90'))}]. Against the other teams' median, the main "
+        f"straights cost {_f(sp26.get('time_total_s'), 2)} s per lap [{ci(sp26.get('time_total_ci90'), 2)}] in 2026.",
         "3. **Power vs drag is not identifiable from public timing data.** Over one straight the two terms are collinear; fits need at least 200 m of clean straight and a "
         "60 km/h speed range and are reported only where that holds. An earlier version of this project claimed a ~36 kW power deficit; it came from not correcting for "
         "gradient and comparing cars on different stretches of track, and is withdrawn.",
@@ -153,18 +153,21 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         gh = up["grip_high_rel"]
         uh: dict[str, Any] = next((e for e in did if e["season"] == 2026 and e["event"] == up["event"]), {})
         p0 = [r["p_no_change"] for r in cp.get("prior_sensitivity", [])]
+        pm = [r["map_probability"] for r in cp.get("prior_sensitivity", []) if r["map_event"] == cp.get("map_event")] or [float("nan")]
         two = cp.get("two_change_events") or []
         lines.append(
             f"6. **The 2026 Hungary upgrade: suggestive, not established.** A changepoint model not told upgrade dates rates the {cp.get('map_event')} the most likely single shift "
-            f"(posterior {_f(cp.get('map_probability'), 2)} vs {_f(cp.get('p_no_change'), 2)} for no change; {_f(min(p0), 2)}–{_f(max(p0), 2)} across the priors in the table below). "
+            f"(posterior {_f(cp.get('map_probability'), 2)} vs {_f(cp.get('p_no_change'), 2)} for no change; across the priors in the table below, P(no change) ranges "
+            f"{_f(min(p0), 2)}–{_f(max(p0), 2)} and the {cp.get('map_event')} {_f(min(pm), 2)}–{_f(max(pm), 2)}). "
             f"Given a change the step is {_pm(cp.get('effect_pct'), 2)}% [{ci(cp.get('effect_ci90_pct'), 2)}]; allowing for no change, {_pm(cp.get('effect_avg_pct'), 2)}% "
             f"[{ci(cp.get('effect_avg_ci90_pct'), 2)}]. "
             + (f"A rise and a fall fit better than one step: two changes ({_pm((cp.get('two_change_steps_pct') or [0, 0])[0], 1)}% at the {two[0]}, "
                f"{_pm((cp.get('two_change_steps_pct') or [0, 0])[1], 1)}% at the {two[1]}) are {_f(cp.get('bf_two_vs_one'), 1)} times more likely than one, so much of the drop "
                "undoes a mid-season peak. " if len(two) == 2 and (cp.get("bf_two_vs_one") or 0) > 3 else "")
             + f"Fast-corner grip vs the other teams went {_f(100 * gh['before']['mean'], 1)}% → {_f(100 * gh['after']['mean'], 1)}% ({gh['before']['n']} events before, "
-            f"only {gh['after']['n']} after). The difference-in-differences test cannot settle it: Aston Martin's own 2026 estimates vary {_f(uh.get('noise_ratio'), 1)} times more "
-            "than its rivals', so the rival placebos are not a fair reference, and against its own "
+            f"only {gh['after']['n']} after with usable Aston Martin telemetry). The difference-in-differences test cannot settle it: Aston Martin's own estimates at its "
+            f"other 2026 dates are spread {_f(uh.get('noise_ratio'), 1)} times as widely as the rivals' estimates at this date, so the rival placebos are not a fair "
+            "reference, and against its own "
             f"{uh.get('n_time_placebos')} other dates no test can go below p = {_f(1 / (1 + (uh.get('n_time_placebos') or 0)), 2)} (the {up['event']} gets {_f(uh.get('time_placebo_p'), 2)})."
         )
     lines += [
@@ -192,10 +195,14 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"together (up to {_f(dq.get('max_clock_offset_m'), 0)} m at the line on laps that pass: {dq.get('max_clock_offset_lap')}), so each lap is re-timed: "
         "positions stay where GPS puts them and time is mapped so the car is at the line at 0 and at the official lap time. Checked against the official sector "
         f"times, which come from separate timing loops, the aligned clock is off by {_f(dq.get('sector_time_error_median_s'), 3)} s in the median lap "
-        f"({_f(dq.get('sector_time_error_rms_s'), 3)} s RMS, worst {_f(dq.get('sector_time_error_max_s'), 2)} s).",
+        f"({_f(dq.get('sector_time_error_rms_s'), 3)} s RMS, worst {_f(dq.get('sector_time_error_max_s'), 2)} s). Section and corner losses are measured against that "
+        "reference lap" + ("; it is the fastest lap of qualifying except at " + ", ".join(
+            f"the {r['season']} {r['event']} ({r['reference']}, {_f(r['gap_s'], 2)} s slower, because {r['fastest']}'s lap fails a check)"
+            for r in s.get("reference_not_fastest", [])) if s.get("reference_not_fastest") else ", which is always the fastest lap of qualifying") + ".",
         "2. **Geometry.** Curvature is a smoothing spline of x(t), y(t) through raw fixes (time-domain, so position noise does not scale with speed), with the "
         "smoothing level chosen per event by the GPS-speed cross-check, then the median across all drivers. Integrated curvature must match the circuit's turn count "
-        "(one for most circuits, zero for figure-of-eight Suzuka).",
+        "(one for most circuits, zero for figure-of-eight Suzuka) within 3.5% below to 5% above; on clean data it runs about 1.5% high, because the smoothed path "
+        "cuts corners slightly.",
         "3. **Lap simulator.** Quasi-steady point mass: grip μ(g + qC<sub>L</sub>A/m) on a friction ellipse, power limit, drag and rolling resistance, closed-lap "
         "forward/backward passes. Calibrated to each measured lap by MAP with weak log-normal priors; Laplace posterior with an AR(1) effective sample size; "
         "checked against a Metropolis sampler; a Gaussian process on the residual shows where point-mass physics fails.",
@@ -208,7 +215,7 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         "7. **Race pace.** Fixed effects for driver, compound and per-compound tyre degradation plus a fuel term per lap on green-flag laps; intervals from a "
         "delete-one-stint jackknife, checked for coverage of the fuel effect and of team gaps with autocorrelated errors.",
         "8. **Season.** Supertime gaps; per-event one-way random-effects variance split; single-changepoint model with exact normal-inverse-gamma evidence, effect averaged "
-        "over the changepoint posterior (given a change, and over all models), prior sensitivity in the table above, and a two-change model as a check on a mid-season "
+        "over the changepoint posterior (given a change, and over all models), prior sensitivity in the table below, and a two-change model as a check on a mid-season "
         "peak; upgrade difference-in-differences (team and event fixed effects, team-specific track-type slopes) with permutation p-values against rivals and against the "
         "team's own other dates, the fairer of the two used as the reference, Holm adjustment and an exact permutation minimum detectable effect.",
         "",

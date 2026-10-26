@@ -37,7 +37,9 @@ from amr_aerotwin.modeling.race_pace import fit_race_pace
 from amr_aerotwin.modeling.validation import (
     car_data_stall_kmh,
     check_lap,
+    corner_min_speeds,
     expected_turn_count,
+    flag_corner_speeds,
     geometry_ok,
     sector_time_errors_s,
 )
@@ -184,17 +186,25 @@ def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[
         raise DataUnavailableError(f"No usable qualifying telemetry for {year} {event}")
     w1: list[str] = []
     out = _align_all(raws, ref, w1)
-    passing = [d for d in order if d in out and check_lap(out[d]).passed]
-    if passing and passing[0] != ref_drv:
+    # Repeat until the reference is the fastest passing lap: a better reference can let faster
+    # laps pass that failed against the broken one (2026 Monza: LEC first, then RUS)
+    first = ref_drv
+    for _ in range(4):
+        passing = [d for d in order if d in out and check_lap(out[d]).passed]
+        if not passing or passing[0] == ref_drv:
+            break
         w2: list[str] = []
         try:
             ref2 = build_reference_line(raws[passing[0]][0], raws[passing[0]][1].lap_time_s)
-            out2 = _align_all(raws, ref2, w2)
-            if sum(check_lap(lp).passed for lp in out2.values()) >= len(passing):
-                ref, out, w1 = ref2, out2, w2
-                warnings.append(f"reference rebuilt from {passing[0]}: the fastest lap ({ref_drv}) fails the data checks")
         except ValueError as err:
             warnings.append(f"reference rebuild from {passing[0]} failed: {err}")
+            break
+        out2 = _align_all(raws, ref2, w2)
+        if sum(check_lap(lp).passed for lp in out2.values()) < len(passing):
+            break
+        ref, ref_drv, out, w1 = ref2, passing[0], out2, w2
+    if ref_drv != first:
+        warnings.append(f"reference rebuilt from {ref_drv}: the fastest lap ({first}) fails the data checks")
     return out, ref, laps, warnings + w1
 
 
@@ -325,12 +335,19 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     c_lab = [f"T{n}{lp}" for n, lp in zip(corners["number"].to_numpy()[order], corners["letter"].to_numpy()[order])]
     info = repo.circuit_info(year, event)
 
+    # Corner minimum speeds checked against GPS (vs the field): a stuck speed channel at a corner
+    # must not enter grip fits, corner-model rows or the lap comparison
+    vmin = {d: corner_min_speeds(st, c_s) for d, st in states.items()}
+    flag_corner_speeds(vmin)
+
     # ------------------------------------------------------------------ grip per team
     team_of = {d: lp.meta.team for d, lp in good.items()}
     color_of = {lp.meta.team: lp.meta.team_color for lp in good.values()}
     pts = {}
     for d, st in states.items():
         p = corner_limit_points(st, c_s)
+        if len(p):
+            p = p[[vmin[d][int(k)]["ok"] for k in p["corner_index"]]]
         p["driver"], p["team"], p["corner_key"] = d, team_of[d], p["corner_index"]
         pts[d] = p
     all_pts = pd.concat(pts.values(), ignore_index=True)
@@ -425,7 +442,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
                 "approach_m": float(approach[i]), "rho_kg_m3": st.rho_kg_m3,
                 "headwind_ms": float(st.v_headwind_ms[idx]), "track_temp_c": lp.ambient.track_temp_c,
                 "tyre_life": lp.meta.tyre_life_laps, "season_2026": float(year >= 2026),
-                "speed_class": corner_speed_class(pole_min[i]), "geometry_ok": geo_ok,
+                "speed_class": corner_speed_class(pole_min[i]), "geometry_ok": geo_ok, "speed_ok": vmin[d][i]["ok"],
             })
     corner_rows = pd.DataFrame(crows)
 
@@ -458,6 +475,9 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     amr_best = min(amr, key=lambda d: amr[d].meta.lap_time_s) if amr else None
     if amr_best:
         cmp_ = compare_laps(good[amr_best], pole, c_s, c_lab)
+        # Minimum speeds where the speed channel disagrees with GPS (vs the field) are not used
+        ok_by_label = dict(zip(c_lab, (v["ok"] for v in vmin[amr_best])))
+        cmp_.corner_table["target_speed_ok"] = cmp_.corner_table["corner"].map(ok_by_label)
         summary["comparison"] = {
             "target": amr_best, "reference": pole_drv,
             "target_speed_kmh": _export_trace(good[amr_best].speed_ms * 3.6, 1),

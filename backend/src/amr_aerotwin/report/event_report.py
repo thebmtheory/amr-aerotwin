@@ -22,9 +22,9 @@ import pandas as pd
 from amr_aerotwin.data.repository import TelemetryRepository
 from amr_aerotwin.domain import TARGET_TEAM, AlignedLap
 from amr_aerotwin.modeling.lap_compare import compare_laps, cumulative_gap, segment_time_loss
-from amr_aerotwin.modeling.validation import check_lap
-from amr_aerotwin.physics.dynamics import VehicleState, estimate_vehicle_state, lap_curvature
-from amr_aerotwin.physics.kinematics import consensus_curvature, corner_windows, gps_spline_kinematics
+from amr_aerotwin.modeling.validation import check_lap, corner_min_speeds, flag_corner_speeds
+from amr_aerotwin.physics.dynamics import HIGH_SPEED_MIN_KMH, LOW_SPEED_MAX_KMH, estimate_vehicle_state, lap_curvature
+from amr_aerotwin.physics.kinematics import consensus_curvature
 from amr_aerotwin.physics.vehicle_params import straight_segments
 from amr_aerotwin.pipeline.event import _load_quali_laps, _r
 from amr_aerotwin.pipeline.season import PROCESSED_DIR, UPGRADES_CSV, load_tables
@@ -32,13 +32,6 @@ from amr_aerotwin.report.build import _clean
 
 STATIC = Path(__file__).parent / "static"
 SECTIONS = ["straights", "high", "medium", "low"]
-CORNER_WINDOW_M = 60.0
-# A corner's minimum speed is reported only when the wheel-speed channel and GPS-derived
-# speed agree on it. The smoothed GPS path reads low in fast corners for every car, so each
-# car's wheel-minus-GPS difference is compared with the field's median at that corner; a
-# stuck or stepping speed channel (2026 British GP: STR at Aintree) misses by 20 km/h or more.
-# On the clean laps at Silverstone the residual stays within +-14 km/h.
-WHEEL_GPS_TOL_KMH = 15.0
 FULL_THROTTLE_PCT = 98.0
 TRACE_STEP = 2  # export every 2nd 5 m grid point
 
@@ -59,44 +52,13 @@ def slug(event: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", event.lower()).strip("-")
 
 
-def corner_min_speeds(state: VehicleState, corner_s: np.ndarray) -> list[dict[str, float]]:
-    """Minimum speed in +-60 m of each corner from the wheel-speed channel and from GPS.
-
-    GPS speed comes from the same time-domain spline of raw fixes used for curvature, so it
-    is independent of the car-data stream. See `flag_corner_speeds` for the check.
-    """
-    lap = state.lap
-    out = []
-    # Disjoint windows: two corners closer than 120 m (Vale, T16-T17) do not share a minimum
-    for win in corner_windows(lap.distance_m, corner_s, lap.lap_length_m, CORNER_WINDOW_M):
-        v_wheel = float(np.min(state.speed_smooth_ms[win]) * 3.6)
-        if len(lap.gps_time_s) > 50:
-            _, v_gps = gps_spline_kinematics(lap.gps_time_s, lap.gps_x_m, lap.gps_y_m, lap.meta.lap_time_s, lap.time_s[win])
-            g = float(np.min(v_gps) * 3.6)
-        else:
-            g = float("nan")
-        out.append({"wheel_kmh": v_wheel, "gps_kmh": g})
-    return out
-
-
-def flag_corner_speeds(vmin: dict[str, list[dict[str, float]]]) -> None:
-    """Set `ok` on every (car, corner): wheel-minus-GPS within WHEEL_GPS_TOL_KMH of the field median."""
-    n = len(next(iter(vmin.values())))
-    for i in range(n):
-        diffs = {t: v[i]["wheel_kmh"] - v[i]["gps_kmh"] for t, v in vmin.items()}
-        med = float(np.nanmedian(list(diffs.values())))
-        for t, v in vmin.items():
-            v[i]["residual_kmh"] = diffs[t] - med
-            v[i]["ok"] = bool(np.isfinite(diffs[t]) and abs(diffs[t] - med) <= WHEEL_GPS_TOL_KMH)
-
-
 def full_throttle_speed_loss(v_kmh: np.ndarray, throttle: np.ndarray) -> float:
     """Largest drop below the running peak speed while still at full throttle (km/h).
 
-    At constant drive power a car below its terminal speed can only accelerate, so speed
-    falling at full throttle on a level straight means drive power fell (energy deployment
-    ended or the car is harvesting); drag or gradient alone would show as a flattening, not
-    a fall, and gradient is shared by every car on the same piece of track.
+    At constant drive power a car below its terminal speed only accelerates on a level
+    straight: drag alone flattens the speed, it does not make it fall. A grade can (uphill),
+    but every car meets the same grade at the same place, so a fall that the other cars do not
+    show means this car's drive power fell (energy deployment ended or the car is harvesting).
     """
     peak = np.maximum.accumulate(v_kmh)
     drop = np.where(throttle >= FULL_THROTTLE_PCT, peak - v_kmh, 0.0)
@@ -255,21 +217,28 @@ def season_block(
         "traces": traces, "track_map": track, "straights": straights, "grip": grip,
         "race_pace": ev.get("race_pace"),
         "declared_upgrades": declared,
-        "upgrade_test": {k: did[k] for k in ("effect_pct", "team_placebo_p", "time_placebo_p", "p_floor", "mde_pct",
-                                              "n_pre", "n_post", "team_placebo_p_holm")} if did else None,
+        "upgrade_test": {k: did.get(k) for k in ("effect_pct", "team_placebo_p", "time_placebo_p", "p_floor", "mde_pct", "n_pre", "n_post",
+                                                  "lead_test", "lead_p", "lead_p_holm", "noise_ratio")} if did else None,
     }
 
 
-def season_context(tables: dict[str, pd.DataFrame], target: str = TARGET_TEAM) -> list[dict[str, Any]]:
-    """Target's qualifying gap and team position at every event, from the official timing."""
+def season_context(tables: dict[str, pd.DataFrame], target: str = TARGET_TEAM,
+                   exclude: set[tuple[int, int]] | None = None) -> list[dict[str, Any]]:
+    """Target's qualifying gap and team position at every event (official timing), and the share
+    of the pole lap's time spent in high-speed corners (the same sections the report uses).
+    `exclude`: (season, round) of events left out, such as wet qualifying sessions."""
     t = tables["timing"]
+    if exclude:
+        t = t[[(sr, rd) not in exclude for sr, rd in zip(t["season"], t["round"])]]
     best_all = t.groupby(["season", "round"])["lap_time_s"].transform("min")
     t = t.assign(gap_pct=100 * (t["lap_time_s"] / best_all - 1))
     team_best = t.groupby(["season", "round", "event", "team"], as_index=False)["gap_pct"].min()
     team_best["position"] = team_best.groupby(["season", "round"])["gap_pct"].rank(method="min").astype(int)
     team_best["n_teams"] = team_best.groupby(["season", "round"])["team"].transform("size")
-    tr = tables["teams"][["season", "round", "track_x"]]
-    out = team_best[team_best["team"] == target].merge(tr.drop_duplicates(["season", "round"]), on=["season", "round"], how="left")
+    sec = tables["sections"]
+    ref = sec.drop_duplicates(["season", "round", "section"]).pivot_table(index=["season", "round"], columns="section", values="reference_time_s")
+    share = (ref["high"] / ref.sum(axis=1)).rename("high_time_share").reset_index()
+    out = team_best[team_best["team"] == target].merge(share, on=["season", "round"], how="left")
     return out.sort_values(["season", "round"]).to_dict("records")
 
 
@@ -289,7 +258,9 @@ def event_report_data(
         p = processed_dir / "events" / f"{year}-{slug(event)}.json"
         if p.exists():
             blocks[str(year)] = season_block(year, event, json.loads(p.read_text()), tables, season, upgrades, repo, target)
-    return {"event": event, "target": target, "seasons": blocks, "context": season_context(tables, target),
+    wet = {(e["season"], e["round"]) for p in (processed_dir / "events").glob("*.json") if (e := json.loads(p.read_text())).get("wet_session")}
+    return {"event": event, "target": target, "seasons": blocks, "context": season_context(tables, target, exclude=wet),
+            "class_thresholds_kmh": [LOW_SPEED_MAX_KMH, HIGH_SPEED_MIN_KMH],
             "season_rates": {y: season.get("section_rates", {}).get(y, {}).get(target) for y in blocks}}
 
 

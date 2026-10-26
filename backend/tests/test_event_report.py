@@ -4,13 +4,8 @@ import json
 
 import numpy as np
 import pytest
-from amr_aerotwin.report.event_report import (
-    WHEEL_GPS_TOL_KMH,
-    flag_corner_speeds,
-    full_throttle_speed_loss,
-    render_event_report,
-    slug,
-)
+from amr_aerotwin.modeling.validation import WHEEL_GPS_TOL_KMH, flag_corner_speeds
+from amr_aerotwin.report.event_report import full_throttle_speed_loss, render_event_report, slug
 
 
 def test_full_throttle_speed_loss_sees_a_fall_but_not_a_lift():

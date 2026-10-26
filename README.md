@@ -90,7 +90,7 @@ make serve
 - The JavaScript simulator matches the Python one to 1e-9.
 - An end-to-end run on real Silverstone data must close on the official lap-time gap.
 - Reproducibility: two full rebuilds from the cache give identical outputs; CI runs ruff, mypy and the tests on a fresh install.
-- Independent review: separate physics, statistics and claims reviews were run against the full results; every finding they confirmed was fixed or the claim revised, and the README findings and technical note are generated from the results so no number is typed by hand.
+- Review: automated physics, statistics and claims review passes were run against the code and the full results; every finding confirmed in them was fixed or the claim revised. The README findings and the technical note are generated from the results, so no number is typed by hand.
 
 ## Data quality gates
 

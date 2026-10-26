@@ -93,22 +93,22 @@
     fill("hero_lede",
       "Measured as a share of the time spent in each part of the lap, " + (Math.max.apply(null, ratioOthers) < 1 ? "every other team more than 1% off pole loses its time faster in the corners than on the straights" : "most teams more than 1% off pole lose their time faster in the corners than on the straights") +
       (a25.straight_to_corner_ratio < 1 ? ", and so did Aston Martin in 2025" : "") + ". In 2026 it loses " +
-      f(st26.v, 1) + "% of its straight-line time (90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "%), close to its " + f(a26.corner_rate_pct, 1) + "% in the corners. Every other team with five or more events has a straight-line rate between " +
+      f(st26.v, 1) + "% of its straight-line time (90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "%), close to its " + f(a26.corner_rate_pct, 1) + "% in the corners. Every other team with five or more events (its own pole laps count as zero loss) has a straight-line rate between " +
       f(Math.min.apply(null, stOthers), 1) + "% and " + f(Math.max.apply(null, stOthers), 1) + "%. Cadillac, about as slow over a lap (" + f(cad.lap_rate_pct, 2) + "% vs " + f(a26.lap_rate_pct, 2) +
       "%), loses " + f(cadSt.v, 1) + "% on the straights. On " + SP26.n_straights_losing_late + " of " + SP26.n_straights + " main straights Aston Martin's speed gap also grows in the second half, by " + f(-SP26.second_half_kmh, 1) + " km/h on average, at full throttle.");
     var tiles = [
       { k: "Straight-line loss rate, 2026", v: f(st26.v, 1) + "%", ci: "90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "% · " + f(vf.ratio, 1) + "× the next team (" + esc(vf.next_team || "–") + "), CI " + ci(vf.ratio_ci90, 1), amr: true },
       { k: "Straights vs corners, 2026", v: f(a26.straight_to_corner_ratio, 2), ci: "ratio of loss rates, CI " + ci(a26.straight_to_corner_ci90, 2) + " · teams over 1% off pole " + f(Math.min.apply(null, ratioOthers), 2) + "–" + f(Math.max.apply(null, ratioOthers), 2) },
       { k: "Same ratio, 2025 car", v: f(a25.straight_to_corner_ratio, 2), ci: "CI " + ci(a25.straight_to_corner_ci90, 2) + " · " + (function () {
-        var r = others("2025").map(function (x) { return x.r.straight_to_corner_ratio; }), lo = Math.min.apply(null, r), hi = Math.max.apply(null, r);
-        return (a25.straight_to_corner_ratio >= lo && a25.straight_to_corner_ratio <= hi ? "in line with the other teams, " : "outside the other teams' range, ") + f(lo, 2) + "–" + f(hi, 2);
+        var r = others("2025", true).map(function (x) { return x.r.straight_to_corner_ratio; }), lo = Math.min.apply(null, r), hi = Math.max.apply(null, r), v = a25.straight_to_corner_ratio;
+        return (v < lo ? "below" : v > hi ? "above" : "in line with") + " the teams over 1% off pole, " + f(lo, 2) + "–" + f(hi, 2);
       })() },
       { k: "Lost late on the straights", v: f(SP26.second_half_kmh, 1) + " km/h", ci: "second half, full throttle, CI " + ci(SP26.second_half_ci90, 1) + " · " + SP26.n_straights + " straights, " + SP26.n_events + " events" },
     ];
     $("tiles").innerHTML = tiles.map(function (t) {
       return '<div class="tile"><span class="k">' + t.k + '</span><span class="v' + (t.amr ? " amr" : "") + '">' + t.v + '</span><span class="ci">' + t.ci + "</span></div>";
     }).join("");
-    fill("hero_note", "Loss rate = time lost to the pole lap in a section ÷ time the pole lap spends there, summed over events. A car that is uniformly slower has equal rates everywhere, so rates (not seconds) show where a car is weak; in seconds, slow corners always dominate because cars spend the most time there. Comparisons use the same piece of track, so geometry and gradient cancel, but laps can be set at different times of the session: track evolution mostly adds grip, which inflates corner rates more than straight-line ones. “Pole lap” means the fastest lap of qualifying (at 2025 Hungary that was a Q2 lap, faster than the Q3 pole). Wet qualifying (2025 Las Vegas) is left out. Intervals are 90% bootstrap intervals over events, widened for small samples (expanded percentile bootstrap; plain percentile intervals cover only about 80% with five to ten events).");
+    fill("hero_note", "Loss rate = time lost to the pole lap in a section ÷ time the pole lap spends there, summed over events. A car that is uniformly slower has equal rates everywhere, so rates (not seconds) show where a car is weak; in seconds, slow corners usually dominate because cars spend the most time there. Comparisons use the same piece of track, so geometry and gradient cancel, but laps can be set at different times of the session: track evolution mostly adds grip, which inflates corner rates more than straight-line ones. “Pole lap” means the fastest lap of qualifying (at 2025 Hungary that was a Q2 lap, faster than the Q3 pole). Wet qualifying (2025 Las Vegas) is left out. Intervals are 90% bootstrap intervals over events, widened for small samples (expanded percentile bootstrap; plain percentile intervals cover only about 80–85% with five to ten events).");
 
     fill("finding_text", "Splitting each main straight into ten equal pieces and comparing speeds piece by piece shows where the straight-line time goes. Aston Martin starts the straights " + f(-((SP26.bins || [])[0] || {}).gap_kmh, 1) +
       " km/h down, " + (function () {
@@ -118,7 +118,7 @@
       })() + f(-SP26.second_half_kmh, 1) + " km/h more in the second half (CI " + ci(SP26.second_half_ci90, 1) +
       "), at full throttle: its drivers are not lifting early. The loss appears on " + SP26.n_straights_losing_late + " of " + SP26.n_straights + " main straights that start and end away from the timing line (" + SP26.n_events +
       " events); leaving out any one event keeps the average between " + f((SP26.second_half_loo_range || [])[1], 1) + " and " + f((SP26.second_half_loo_range || [])[0], 1) +
-      " km/h. " + ((SP26.first_half_ci90 || [0, 0])[1] < 0 ? "Losing ground from the first metres means weaker acceleration than the field, not only a lower top speed. " : "Holding the gap while starting slower already means weaker acceleration than the field. ") + "The shape does not identify the cause: a point-mass simulation reproduces it with extra drag alone, and energy deployment ending earlier or harvesting at full throttle fit as well. " +
+      " km/h. " + ((SP26.first_half_ci90 || [0, 0])[1] < 0 ? "Losing ground from the first metres means weaker acceleration than the field, not only a lower top speed. " : "Holding the gap while starting slower already means weaker acceleration than the field. ") + "The gap reaches " + f(-((SP26.bins || [])[(SP26.bins || []).length - 1] || {}).gap_kmh, 1) + " km/h at the braking point. Extra drag, deployment ending earlier and harvesting at full throttle can all open a gap along a straight; public timing data cannot tell them apart. " +
       (function () {
         var o = ((S.straight_profile || {})["2026"]) || {}, rows = Object.keys(o).filter(function (k) { return k !== TARGET && o[k].second_half_kmh != null; });
         if (!rows.length) return "";
@@ -133,22 +133,24 @@
         : "in 2026 Aston Martin's laps pass that at fewer than four events, so no fit is reported. In 2025 (" + (pt25.n_events || 0) + " events) the fitted power and drag move together (correlation " + f(pt25.correlation, 2) + ").") +
       " An earlier version of this page claimed a 36 kW power deficit; it came from not correcting for gradient and comparing cars on different stretches of track, and is withdrawn.");
     var st = (SP26.time_build_ci90 || []);
-    fill("decomp_text", "On the main straights alone this costs " + f(SP26.time_total_s, 2) + " s per lap (CI " + ci(SP26.time_total_ci90, 2) + "), of which " + f(SP26.time_build_s, 2) +
+    fill("decomp_text", "Against the other teams' median, the main straights alone cost " + f(SP26.time_total_s, 2) + " s per lap (CI " + ci(SP26.time_total_ci90, 2) + "), of which " + f(SP26.time_build_s, 2) +
       " s (CI " + ci(st, 2) + ") is the speed lost along the straight rather than carried from the corner.");
 
     if (UPG) {
       var gh = UPG.grip_high_rel;
       var effs = (S.upgrades || {}).effects || [], uh = effs.filter(function (e) { return e.season === 2026 && e.event === UPG.event; })[0] || {};
       var cpS = CP26.prior_sensitivity || [], p0s = cpS.map(function (r) { return r.p_no_change; });
+      var pm = cpS.filter(function (r) { return r.map_event === CP26.map_event; }).map(function (r) { return r.map_probability; });
       fill("upgrade_text", "Aston Martin declared a " + (declaredParts(UPG.event, 2026) || "major") + " upgrade at the " + esc(UPG.event) +
         ". A changepoint model that is not told upgrade dates rates the " + esc(CP26.map_event || "–") + " the most likely place for a single shift in its qualifying pace (posterior " + f(CP26.map_probability, 2) +
-        ", against " + f(CP26.p_no_change, 2) + " for no change; " + f(Math.min.apply(null, p0s), 2) + "–" + f(Math.max.apply(null, p0s), 2) + " across the prior settings tried). Given a change, the step is " +
+        ", against " + f(CP26.p_no_change, 2) + " for no change; across the prior settings tried, P(no change) ranges " + f(Math.min.apply(null, p0s), 2) + "–" + f(Math.max.apply(null, p0s), 2) +
+        " and the " + esc(CP26.map_event || "–") + " " + f(Math.min.apply(null, pm), 2) + "–" + f(Math.max.apply(null, pm), 2) + "). Given a change, the step is " +
         sgn(CP26.effect_pct, 2) + "% of lap time (CI " + ci(CP26.effect_ci90_pct, 2) + "); allowing for no change it averages " + sgn(CP26.effect_avg_pct, 2) + "% (CI " + ci(CP26.effect_avg_ci90_pct, 2) + "). " +
         (CP26.two_change_events && CP26.bf_two_vs_one > 3 ? "But the season fits a rise and a fall better than one step: a model with two changes (" + sgn((CP26.two_change_steps_pct || [])[0], 1) + "% at the " + esc(CP26.two_change_events[0]) +
           ", " + sgn((CP26.two_change_steps_pct || [])[1], 1) + "% at the " + esc(CP26.two_change_events[1]) + ") is " + f(CP26.bf_two_vs_one, 1) + " times more likely, so much of the drop undoes a mid-season peak. " : "") +
         "Fast-corner grip relative to the other teams went from " + f(gh.before.mean * 100, 1) + "% to " + f(gh.after.mean * 100, 1) + "% (" + gh.before.n + " events before, only " + gh.after.n +
-        " after with clean geometry). The difference-in-differences test cannot settle it either: Aston Martin’s own 2026 estimates vary about " + f(uh.noise_ratio, 0) +
-        " times more than any rival’s, so beating every rival’s placebo means little, and against its own " + (uh.n_time_placebos || "–") + " other dates no test can go below p = " + f(1 / (1 + (uh.n_time_placebos || 0)), 2) +
+        " after with usable Aston Martin telemetry). The difference-in-differences test cannot settle it either: Aston Martin’s own 2026 estimates at other dates are spread about " + f(uh.noise_ratio, 0) +
+        " times as widely as the rivals’ estimates at this date, so beating every rival’s placebo means little, and against its own " + (uh.n_time_placebos || "–") + " other dates no test can go below p = " + f(1 / (1 + (uh.n_time_placebos || 0)), 2) +
         " (the " + esc(UPG.event) + " gets " + f(uh.time_placebo_p, 2) + "). Suggestive, not established.");
     }
   }
@@ -311,7 +313,9 @@
         '<span class="pill ' + (e.lead_p_holm <= 0.1 ? "yes" : "no") + '">' + verdict + "</span>" + (e.overlapping && e.overlapping.length ? ' <span class="hint">overlaps ' + e.overlapping.map(short).join(", ") + "</span>" : "") +
         (detectable ? "" : ' <span class="hint">below detectable size</span>') + "</td></tr>";
     });
-    $("tbl-did").innerHTML = $("tbl-did").querySelector("caption").outerHTML +
+    var floors = [].concat.apply([], eff.map(function (e) { return [1 / (1 + e.n_team_placebos), 1 / (1 + e.n_time_placebos)]; })).filter(isFinite);
+    $("tbl-did").innerHTML = "<caption>Declared upgrades: difference-in-differences, 4 events either side. A placebo p cannot go below 1 / (1 + number of placebos): " +
+      f(Math.min.apply(null, floors), 2) + "–" + f(Math.max.apply(null, floors), 2) + " here.</caption>" +
       '<thead><tr><th>Upgrade</th><th class="num">Effect on gap</th><th class="num">Detectable</th><th class="num">Events pre / post</th><th class="num">p vs rivals</th><th class="num">p vs own dates</th><th>Reference used</th><th class="num">Holm-adjusted</th><th>Verdict</th></tr></thead><tbody>' +
       rows.join("") + '</tbody><tfoot><tr><td colspan="9" class="hint">Each upgrade is compared with rivals given the same date (team placebos) and with Aston Martin at its other dates (time placebos). When Aston Martin’s own estimates are much noisier than its rivals’ (noise ratio above 1.5), only the second is a fair reference. Detectable = the effect the reference test finds with 80% power at the 10% level. With ' +
       eff.length + " upgrades tested, the smallest Holm-adjusted p any of them could reach is " + f(up.holm_floor_lead, 2) + ", so none can be called significant after correction whatever its size.</td></tr></tfoot>";
@@ -409,7 +413,7 @@
 
     var corners = (c.corners || []).slice().sort(function (a, b) { return b.total_s - a.total_s; });
     $("tbl-corners").innerHTML = '<thead><tr><th>Corner</th><th class="num">Lost, s</th><th class="num">Entry</th><th class="num">Apex</th><th class="num">Exit</th><th class="num">Min speed Δ</th></tr></thead><tbody>' +
-      corners.map(function (r) { return "<tr><td>" + esc(r.corner) + " <span class=\"hint\">" + r.speed_class + '</span></td><td class="num">' + sgn(r.total_s, 3) + '</td><td class="num">' + sgn(r.entry_s, 3) + '</td><td class="num">' + sgn(r.apex_s, 3) + '</td><td class="num">' + sgn(r.exit_s, 3) + '</td><td class="num">' + sgn(r.min_speed_delta_kmh, 1) + " km/h</td></tr>"; }).join("") + "</tbody>";
+      corners.map(function (r) { return "<tr><td>" + esc(r.corner) + " <span class=\"hint\">" + r.speed_class + '</span></td><td class="num">' + sgn(r.total_s, 3) + '</td><td class="num">' + sgn(r.entry_s, 3) + '</td><td class="num">' + sgn(r.apex_s, 3) + '</td><td class="num">' + sgn(r.exit_s, 3) + '</td><td class="num">' + (r.target_speed_ok === false ? '<span class="hint" title="the speed channel disagrees with GPS here">n/a (speed channel)</span>' : sgn(r.min_speed_delta_kmh, 1) + " km/h") + "</td></tr>"; }).join("") + "</tbody>";
 
     var ann = e.corners.distance_m.map(function (s, i) { return { x: s, yref: "paper", y: 1, yanchor: "bottom", text: e.corners.label[i], showarrow: false, font: { size: 9, color: t.muted, family: t.mono } }; });
     plot("ch-speed", [
@@ -476,7 +480,7 @@
       shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 0, line: { color: t.muted, width: 1 } }] }));
     var e25 = (by["2025"] || []).map(function (x) { return Math.abs(x.lap_time_error_s); }), e26 = (by["2026"] || []).map(function (x) { return Math.abs(x.lap_time_error_s); });
     fill("calacc_text", "Pole laps, every event with clean geometry. Median absolute lap-time error " + f(median(e25), 2) + " s in 2025 and " + f(median(e26), 2) +
-      " s in 2026. The 2026 fits are weaker because power there falls with time along a straight (energy deployment), which a constant-power point-mass model cannot represent; the discrepancy chart shows exactly where.");
+      " s in 2026. The 2026 fits are weaker, consistent with power falling with time along a straight (energy deployment), which a constant-power point-mass model cannot represent; the discrepancy chart shows where the fit misses.");
   }
   function median(a) { a = a.slice().sort(function (x, y) { return x - y; }); return a.length ? (a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2) : NaN; }
 
@@ -530,7 +534,9 @@
     var rt = (REL26.clip_time_loss_s || {});
     fill("energy_text", "In 2026 cars reach peak speed part-way along a straight and then slow down at full throttle. Speed-dependent power alone, including the regulated MGU-K taper, cannot do that; it means power falls with time as deployment ends or the car harvests. Acceleration here has gravity removed using GPS altitude, and only decelerations lasting at least 30 m count. The field loses on average " +
       f(fieldLoss, 3) + " s per lap against holding peak speed, against " + f(loss25, 3) + " s in 2025. Aston Martin's loss on this measure (" + sgn(rt.mean, 3) + " s vs the other teams, CI " + f(rt.lo, 3) + " to " + f(rt.hi, 3) +
-      ") is not distinguishable from the field, so this narrow measure of clipping does not by itself explain its straight-line deficit.");
+      ")" + (rt.lo > 0 ? " is larger than the field's and the largest of any team on this measure, but it is small next to its whole straight-line deficit, so this narrow measure of clipping does not by itself explain it."
+        : rt.hi < 0 ? " is smaller than the field's, so clipping on this measure does not explain its straight-line deficit."
+        : " is not distinguishable from the field, so this narrow measure of clipping does not by itself explain its straight-line deficit.") );
   }
 
   // ------------------------------------------------------------------ race pace
@@ -558,7 +564,7 @@
     t = t || theme();
     var cm = S.corner_model || {};
     var names = { steady: "Steady-state formula (aero term not identified: v = √(aR))", physics: "Lap sim on track geometry, nominal car from training events", ml: "Gradient boosting only", hybrid: "Hybrid: lap sim + boosted residual" };
-    $("tbl-cm").innerHTML = "<caption>Out of sample by whole circuit (" + cm.n_circuits + " circuits, " + cm.n_events + " events, " + cm.n_rows + " corners)</caption>" +
+    $("tbl-cm").innerHTML = "<caption>Out of sample by whole circuit (" + cm.n_circuits + " circuits, " + cm.n_events + " events, " + (cm.n_corners || "–") + " corners, " + cm.n_rows + " car-corner speeds)</caption>" +
       '<thead><tr><th>Model</th><th class="num">RMSE</th><th class="num">R²</th><th class="num">Within-corner R²</th></tr></thead><tbody>' +
       (cm.metrics || []).map(function (r) { return "<tr><td>" + names[r.model] + '</td><td class="num">' + f(r.rmse_kmh, 1) + ' km/h</td><td class="num">' + f(r.r2, 3) + '</td><td class="num">' + (r.model === "steady" || r.model === "physics" ? "n/a" : f(r.within_corner_r2, 2)) + "</td></tr>"; }).join("") +
       '</tbody><tfoot><tr><td colspan="4" class="hint">Within-corner R² is n/a for the physics-only models: they predict the same speed for every car at a corner.</td></tr></tfoot>';
@@ -629,8 +635,8 @@
     }).join("") + (dq.events_geometry_failed || []).map(function (e) { return "<li>" + esc(e) + ": kept for timing analyses, excluded from curvature-based fits (turning number check)</li>"; }).join("");
     fill("method_html",
       "<h3>Pipeline</h3><p>Fastest valid qualifying lap of every driver at every event, resampled onto a shared distance grid by projecting GPS fixes onto the pole lap’s line. Time comes from the measured timing channel and closes exactly on the official lap time. The archive’s GPS stream runs about " + f(dq.gps_lag_s_median, 2) +
-      " s ahead of the car-data stream; left uncorrected that misplaces samples by 10 m at 300 km/h. Each lap’s offset is estimated by matching GPS-derived speed to the wheel-speed sensor.</p>" +
-      "<p>Track curvature is the median over all drivers of a time-domain smoothing spline through the raw ~4 Hz GPS fixes. The smoothing level is chosen per event by the same speed cross-check, and every lap must integrate to one full turn.</p>" +
+      " s ahead of the car-data stream; left uncorrected that misplaces samples by " + f((dq.gps_lag_s_median || 0) * 300 / 3.6, 0) + " m at 300 km/h. Each lap’s offset is estimated by matching GPS-derived speed to the wheel-speed sensor.</p>" +
+      "<p>Track curvature is the median over all drivers of a time-domain smoothing spline through the raw ~4 Hz GPS fixes. The smoothing level is chosen per event by the same speed cross-check, and each event's curvature must integrate to the circuit's own turn count (zero for figure-of-eight Suzuka).</p>" +
       "<h3>What the numbers can and cannot say</h3><p>Grip, downforce and drag figures are effective values for a point-mass car: load transfer and tyre load sensitivity are folded in, so absolute μ and C<sub>L</sub>A are not separable from public data and are reported only as comparisons at matched dynamic pressure. Mass is the regulation minimum plus an assumed 5 kg of fuel. The power analysis measures deployed wheel power, which includes energy strategy. Correlation with declared upgrades is evidence, not proof: four events either side is a short window, and track layouts differ.</p>");
   }
 

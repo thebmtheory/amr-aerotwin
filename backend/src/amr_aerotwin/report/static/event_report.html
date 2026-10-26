@@ -209,7 +209,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
           <div class="chart tall" id="ch-cspeed" role="img" aria-label="Minimum corner speed difference to the field"></div>
         </figure>
         <figure class="fig">
-          <figcaption><strong>Time lost to the pole lap at each corner</strong><span>Braking (−120 to −20 m), apex (±20 m) and exit (+20 to +120 m) of each corner, seconds</span></figcaption>
+          <figcaption><strong>Time lost to the pole lap at each corner</strong><span>Entry (120 to 20 m before the turn marker, mostly braking), apex (±20 m) and exit (20 to 120 m after), seconds</span></figcaption>
           <div class="chart tall" id="ch-ctime" role="img" aria-label="Time lost per corner by phase"></div>
         </figure>
       </div>
@@ -227,7 +227,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
       <div class="grid2" id="straight-figs"></div>
       <div class="legend" id="lg-straights"></div>
       <figure class="fig" style="margin-top:20px">
-        <figcaption><strong>Speed lost at full throttle</strong><span>Largest drop below the car's own peak speed while the throttle stays above 98%, km/h. Drag or gradient alone can only stop a car accelerating; speed falling at full throttle means drive power fell.</span></figcaption>
+        <figcaption><strong>Speed lost at full throttle</strong><span>Largest drop below the car's own peak speed while the throttle stays above 98%, km/h. On a level straight drag alone only stops a car accelerating; the gradient is the same for every car at the same place, so a fall that the other cars do not show means drive power fell.</span></figcaption>
         <div class="chart short" id="ch-ftloss" role="img" aria-label="Speed lost at full throttle on each straight"></div>
       </figure>
     </div>
@@ -284,12 +284,12 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
         </div>
         <div>
           <h3>Sections and corners</h3>
-          <p>Corners are the archive's official turn positions; each takes 120 m either side of its apex, split into braking, apex and exit. Everything else is "straights". Corner classes come from the pole lap's minimum speed: low under 130 km/h, medium 130 to 220 km/h, high above.</p>
+          <p id="m-sections"></p>
           <p id="m-flags"></p>
         </div>
         <div>
           <h3>Straights and grip</h3>
-          <p>Straights are the pole lap's full-throttle runs of at least 400 m. Every team's best lap is compared at the same positions, so gradient and wind are shared. Grip comes from cornering-limit points fitted against dynamic pressure; it is an effective point-mass figure, not a tyre or aero measurement.</p>
+          <p>Straights are the pole lap's full-throttle runs of at least 400 m that do not cross the timing line (the lap's speed trace is discontinuous there, so the straight past the pits is not shown). Every team's best lap is compared at the same positions, so gradient and wind are shared. Grip comes from cornering-limit points fitted against dynamic pressure; it is an effective point-mass figure, not a tyre or aero measurement.</p>
           <p>Race pace uses green-flag laps with fuel burn and tyre wear as fixed effects; intervals are a delete-one-stint jackknife.</p>
         </div>
         <div>
@@ -567,7 +567,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     ], layout(t, { margin: { l: 118, r: 16, t: 6, b: 44 }, barmode: "overlay", xaxis: { title: { text: "km/h vs field median" }, zeroline: true },
       yaxis: { autorange: "reversed", tickfont: { family: t.body, size: 11 }, gridcolor: "rgba(0,0,0,0)" } }));
 
-    var phases = [["target_entry_s", "braking", 0.55], ["target_apex_s", "apex", 0.8], ["target_exit_s", "exit", 1]];
+    var phases = [["target_entry_s", "entry", 0.55], ["target_apex_s", "apex", 0.8], ["target_exit_s", "exit", 1]];
     plot("ch-ctime", phases.map(function (p) {
       return { y: labels, x: C.map(function (c) { return c[p[0]]; }), type: "bar", orientation: "h", name: p[1],
         marker: { color: t.amr, opacity: p[2], line: { color: t.surface, width: 1 } }, hovertemplate: "%{y} " + p[1] + ": %{x:+.3f} s<extra></extra>" };
@@ -594,7 +594,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     $("t-corners").innerHTML = "Against the median of the other teams' best laps, Aston Martin's minimum speed was on average " +
       ["high", "medium", "low"].filter(function (k) { return byClass[k]; }).map(function (k) { return "<strong>" + sg(avg(byClass[k]), 1) + " km/h in " + k + "-speed corners</strong>"; }).join(", ") +
       ". The corners that cost most time to the pole lap were " + worst.map(function (c) { return cname(c) + " (" + f(c.target_time_s, 2) + " s)"; }).join(", ") +
-      ". Over all corners the loss splits " + f(entry, 2) + " s braking, " + f(apex, 2) + " s apex and " + f(exit, 2) + " s exit. Braking-phase losses after a straight partly carry over the lower speed the car arrives with.";
+      ". Over all corners the loss splits " + f(entry, 2) + " s on entry, " + f(apex, 2) + " s at the apex and " + f(exit, 2) + " s on exit. Entry losses after a straight partly carry over the lower speed the car arrives with.";
   }
 
   // ------------------------------------------------------------- straights
@@ -632,10 +632,11 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
         cmp(me.peak_kmh - med("peak_kmh"), "higher", "lower") + " and finished " + cmp(me.end_kmh - med("end_kmh"), "higher", "lower") + "; at full throttle it fell " + f(me.full_throttle_loss_kmh, 1) +
         " km/h below its own peak (" + lossRank(rank, others.length + 1) + "; field median " + f(med("full_throttle_loss_kmh"), 1) + " km/h).";
     });
-    var anyClip = s.straights.some(function (st) { return Object.keys(st.teams).some(function (k) { return st.teams[k].full_throttle_loss_kmh > 8; }); });
+    var maxLoss = Math.max.apply(null, [0].concat.apply([], s.straights.map(function (st) { return Object.keys(st.teams).map(function (k) { return st.teams[k].full_throttle_loss_kmh || 0; }); })));
+    var anyClip = maxLoss > 8;
     $("t-straights").innerHTML = parts.join(" ") + (anyClip ?
       " Speed falling at full throttle happens to most 2026 cars somewhere on the lap: when deployment ends or the car harvests, drive power drops below what drag absorbs. Where each team takes that loss is an energy-strategy choice, so the straight-by-straight pattern says as much about strategy as about the car." :
-      " No car loses more than a few km/h at full throttle: speed flattens toward the drag limit but does not fall, as expected with constant drive power.");
+      " No car loses more than " + f(Math.ceil(maxLoss), 0) + " km/h at full throttle: speed flattens toward the drag limit rather than falling, as expected with constant drive power.");
   }
 
   // ------------------------------------------------------------- grip vs speed
@@ -684,7 +685,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     var me = rp.team_pace.filter(function (r) { return r.team === T; })[0], q = row(null, T);
     var ahead = tp[tp.map(function (r) { return r.team; }).indexOf(T) + 1];
     $("t-race").innerHTML = "On race pace Aston Martin was <strong>" + f(me.gap_s, 2) + " s per lap</strong> (90% interval " + f(me.ci_lo, 2) + "–" + f(me.ci_hi, 2) + ") slower than " + esc(tp[tp.length - 1].team) +
-      ", about " + f(100 * me.gap_s / me.pace_s, 1) + "% of a lap, against " + f(q.gap_pct, 1) + "% in qualifying" + (ahead ? ", and " + f(me.gap_s - ahead.gap_s, 2) + " s per lap slower than the next team, " + esc(ahead.team) : "") +
+      ", about " + f(100 * me.gap_s / tp[tp.length - 1].pace_s, 1) + "% of the fastest team's race lap, against " + f(q.gap_pct, 1) + "% in qualifying" + (ahead ? ", and " + f(me.gap_s - ahead.gap_s, 2) + " s per lap slower than the next team, " + esc(ahead.team) : "") +
       ". The model removes fuel burn (laps get " + f(-rp.fuel_s_per_lap, 3) + " s faster per lap as fuel burns) and tyre wear by compound, over " + rp.n_laps + " green-flag laps.";
   }
 
@@ -728,13 +729,14 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
       "more at " + CIRCUIT + " in " + ["no", "one", "two", "three"][nWorse] + " of the four sections";
     $("t-context").innerHTML = "In " + y1 + " " + CIRCUIT + " was Aston Martin's " + rankPhrase(r1) + " qualifying gap of " + r1.n + " events; in " + y0 + " its " + rankPhrase(r0) + " of " + r0.n + ". " +
       (b1 ? "Against its own " + y1 + " average the car lost " + worseText + (nWorse ? ", most of all in the " + SEC_LABEL[worstVs].toLowerCase() + " (" + f(a1[worstVs], 2) + "% against " + f(b1[worstVs], 2) + "%)" : "") +
-        ". " + f(100 * S(y1).track.high_speed_share, 0) + "% of the pole lap here is spent in high-speed corners, the " + (function () {
-        var c = ctx.filter(function (r) { return String(r.season) === y1 && r.track_x != null; }).sort(function (p, q) { return q.track_x - p.track_x; });
-        var i = c.map(function (r) { return r.event; }).indexOf(R.event) + 1;
-        return (i === 1 ? "highest" : ord(i) + "-highest") + " share of the " + c.length + " " + y1 + " events analysed";
-      })() + ". " : "") +
+        ". " + (function () {
+        var c = ctx.filter(function (r) { return String(r.season) === y1 && r.high_time_share != null; }).sort(function (p, q) { return q.high_time_share - p.high_time_share; });
+        var me = c.filter(function (r) { return r.event === R.event; })[0], i = c.indexOf(me) + 1;
+        return me ? f(100 * me.high_time_share, 0) + "% of the pole lap's time here is in high-speed corners, the " + (i === 1 ? "highest" : ord(i) + "-highest") + " share of the " + c.length + " " + y1 + " events analysed. " : "";
+      })() : "") +
       (up.length ? "Aston Martin brought a declared " + esc(up[0].major_performance_upgrade) + " upgrade to " + CIRCUIT + " in " + y0 + " (" + esc(up[0].components) + ")" +
-        (ut ? "; the season difference-in-differences test finds no measurable change in its gap afterwards (" + sg(ut.effect_pct, 2) + "%, placebo p = " + f(ut.team_placebo_p, 2) + "; the test could detect about " + f(ut.mde_pct, 1) + "% or more)." : ".") : "");
+        (ut ? "; the season difference-in-differences test finds no measurable change in its gap afterwards (" + sg(ut.effect_pct, 2) + "%, p = " + f(ut.lead_p, 2) + " against " + (ut.lead_test === "time" ? "its own other dates" : "rivals given the same date") +
+          (ut.mde_pct != null ? "; the test could detect about " + f(ut.mde_pct, 1) + "% or more)." : ")." ) : ".") : "");
   }
   function seasonRates(y) {
     var r = (R.season_rates || {})[y]; if (!r) return null;
@@ -743,6 +745,9 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
 
   // ------------------------------------------------------------- notes
   function renderNotes() {
+    var th = R.class_thresholds_kmh || [150, 230];
+    $("m-sections").textContent = "Corners are the archive's official turn markers; each takes 120 m either side of its marker, split into entry (120 to 20 m before, mostly braking), apex (±20 m) and exit (20 to 120 m after). Corners closer than 240 m split the track between them at the midpoint. Everything else is \u201cstraights\u201d. Corner classes come from the pole lap's minimum speed: low under " +
+      f(th[0], 0) + " km/h, medium " + f(th[0], 0) + " to " + f(th[1], 0) + " km/h, high " + f(th[1], 0) + " km/h and above.";
     var flags = [];
     YEARS.forEach(function (y) { S(y).flagged_corner_speeds.forEach(function (q) { flags.push(y + " " + q.driver + " (" + q.team + ") at " + q.corner + (q.name ? " " + q.name : "") + ": wheel " + f(q.wheel_kmh, 0) + " vs GPS " + f(q.gps_kmh, 0) + " km/h"); }); });
     $("m-flags").textContent = "Each corner's minimum speed is checked against GPS-derived speed, relative to the field's typical difference at that corner; misses beyond 15 km/h are not used. Flagged: " + (flags.length ? flags.join("; ") : "none") + ".";

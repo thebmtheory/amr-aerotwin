@@ -151,9 +151,9 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     half = PROFILE_BINS // 2
     first = boots[:, half - 1] - boots[:, 0]
     second = boots[:, -1] - boots[:, half]
-    # Note: the shape alone cannot separate causes. A point-mass simulation shows that a
-    # corner-exit deficit plus extra drag also gives a flat first half and a late loss, so the
-    # profile locates the loss along the straight but does not attribute it.
+    # The shape alone cannot separate causes: extra drag, deployment ending earlier and
+    # harvesting at full throttle all open a gap along a straight, so the profile locates the
+    # loss but does not attribute it.
     n = len(arr)
     lo, hi = boot_ci_columns(boots, n)
     out = pd.DataFrame({
