@@ -18,7 +18,6 @@ const PORT = 9333;
 // [output name, page path, chart id, season toggle to click first (or null)]
 const FIGURES = [
   ["loss-rates", "", "ch-rates", null],
-  ["straight-profile", "", "ch-profile", null],
   ["silverstone-gap", "reports/british-grand-prix.html", "ch-rival", null],
   ["silverstone-straights", "reports/british-grand-prix.html", "ch-st-1", null],
 ];

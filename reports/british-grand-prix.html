@@ -322,6 +322,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
 (function () {
   "use strict";
   var R = window.REPORT, T = R.target, YEARS = Object.keys(R.seasons).sort();
+  var CIRCUIT = (R.seasons[YEARS[YEARS.length - 1]] || {}).circuit || R.event;
   var state = { season: YEARS[YEARS.length - 1], unit: "s" };
   var SEC_LABEL = { straights: "Straights", high: "High-speed corners", medium: "Medium-speed corners", low: "Low-speed corners" };
   var SECS = ["straights", "high", "medium", "low"];
@@ -335,7 +336,9 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
   function row(y, team) { return S(y).order.filter(function (r) { return r.team === team; })[0]; }
   function cname(c) { return c.label + (c.name ? " " + c.name : ""); }
   // The reference is the fastest lap of qualifying: the pole lap, except where that came before Q3
-  function poleWord(y) { var p = S(y).pole; return p.is_pole === false ? "fastest lap of qualifying (" + (p.segment || "before Q3") + ")" : "pole"; }
+  function isPole(y) { return S(y).pole.is_pole !== false; }
+  function poleWord(y) { var p = S(y).pole; return isPole(y) ? "pole" : (p.segment || "pre-Q3") + " lap, the fastest of qualifying,"; }
+  function poleShort(y) { return isPole(y) ? "pole" : "the fastest lap"; }
   var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   function day(iso) { var p = String(iso || "").split("-"); return p.length === 3 ? +p[2] + " " + MONTHS[+p[1] - 1] + " " + p[0] : iso; }
   function lossRank(rank, n) {  // rank 1 = the largest loss of n cars
@@ -384,10 +387,10 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     var big = d ? SECS.slice().sort(function (a, b) { return d[b] - d[a]; })[0] : null;
     var allPos = d && SECS.every(function (k) { return d[k] >= -0.005; });
     if (d && allPos && d[big] > 0.5 * gapRival) {
-      $("headline").textContent = "At Silverstone in " + y + " Aston Martin was " + (s.target_position === s.n_teams ? "the slowest team" : ord(s.target_position) + " of " + s.n_teams) +
+      $("headline").textContent = "At " + CIRCUIT + " in " + y + " Aston Martin was " + (s.target_position === s.n_teams ? "the slowest team" : ord(s.target_position) + " of " + s.n_teams) +
         ", and more than half of its gap to the next car was on the " + (big === "straights" ? "straights" : SEC_LABEL[big].toLowerCase()) + ".";
     } else {
-      $("headline").textContent = "Aston Martin at Silverstone: " + ord(s.target_position) + " of " + s.n_teams + " teams in " + y + ".";
+      $("headline").textContent = "Aston Martin at " + CIRCUIT + ": " + ord(s.target_position) + " of " + s.n_teams + " teams in " + y + ".";
     }
     var y0 = YEARS[0], s0 = S(y0), me0 = row(y0, T);
     var rp = s.race_pace && s.race_pace.team_pace ? s.race_pace.team_pace.filter(function (r) { return r.team === T; })[0] : null;
@@ -395,7 +398,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     $("lede").textContent = me.driver + "'s best lap was " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) slower than " + s.pole.driver + "'s " + poleWord(y) + " for " + s.pole.team +
       (rv ? " and " + f(gapRival, 3) + " s slower than " + rv.driver + "'s " + s.rival + ". Against " + s.rival + " it lost " + f(d.straights, 2) + " s on the straights, " +
         f(d.high, 2) + " s in high-speed corners, " + f(d.medium, 2) + " s in medium and " + f(d.low, 2) + " s in low-speed corners." : ".") +
-      " A year earlier the car was " + ord(s0.target_position) + " of " + s0.n_teams + ", " + f(me0.gap_pct, 2) + "% off pole.";
+      " A year earlier the car was " + ord(s0.target_position) + " of " + s0.n_teams + ", " + f(me0.gap_pct, 2) + "% off " + poleShort(y0) + ".";
     var tiles = [
       { k: "Qualifying " + y, v: ord(s.target_position) + " / " + s.n_teams, d: "+" + f(me.gap_s, 3) + " s to pole (" + f(me.gap_pct, 2) + "%)", amr: true },
       rv ? { k: "Gap to " + s.rival, v: "+" + f(gapRival, 3) + " s", d: f(100 * d.straights / gapRival, 0) + "% of it on the straights" } : null,
@@ -424,8 +427,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     var s = S(), o = s.order.slice().reverse();
     $("t-qualifying").innerHTML = (function () {
       var me = row(null, T), mate = me.teammate;
-      return "Aston Martin qualified <strong>" + ord(s.target_position) + " of " + s.n_teams + " teams</strong>, " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) behind " + esc(s.pole.driver) +
-        " (" + esc(s.pole.team) + ", " + poleWord() + ")." + (mate ? " " + esc(mate) + " was " + f(me.teammate_time_s - me.lap_time_s, 3) + " s slower than " + esc(me.driver) + "." : "") +
+      return "Aston Martin qualified <strong>" + ord(s.target_position) + " of " + s.n_teams + " teams</strong>, " + f(me.gap_s, 3) + " s (" + f(me.gap_pct, 2) + "%) behind " + esc(s.pole.driver) + "'s " + poleWord() + " for " + esc(s.pole.team) + "." + (mate ? " " + esc(mate) + " was " + f(me.teammate_time_s - me.lap_time_s, 3) + " s slower than " + esc(me.driver) + "." : "") +
         (s.rival ? " The team directly ahead was " + esc(s.rival) + ", " + f(me.lap_time_s - row(null, s.rival).lap_time_s, 3) + " s faster." : "");
     })();
     plot("ch-order", [
@@ -465,7 +467,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     var me = row(null, T);
     if (s.rival) {
       var d = sectionDiff(state.season, T, s.rival), gap = me.lap_time_s - row(null, s.rival).lap_time_s;
-      $("c-rival-title").textContent = "Aston Martin vs " + s.rival + ", the team directly ahead";
+      $("c-rival-title").textContent = "Aston Martin vs " + s.rival + ", the team directly ahead, " + state.season;
       plot("ch-rival", [{
         type: "waterfall", orientation: "v", x: SECS.map(function (k) { return SEC_LABEL[k].replace(" corners", ""); }).concat(["Lap"]),
         y: SECS.map(function (k) { return d[k]; }).concat([gap]), measure: SECS.map(function () { return "relative"; }).concat(["total"]),
@@ -553,7 +555,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
 
     var nGain = L.filter(function (v) { return v < 0; }).length / L.length;
     $("t-lap").innerHTML = esc(tr.target.driver) + "'s lap against " + esc(tr.pole.driver) + "'s " + poleWord() + (rv ? " and " + esc(rv.driver) + "'s " + esc(rv.team) : "") +
-      ". Where the bottom panel rises the car is losing time; Aston Martin was gaining on the pole lap over " + f(100 * nGain, 0) + "% of the track." +
+      ". Where the bottom panel rises the car is losing time; Aston Martin was gaining on that lap over " + f(100 * nGain, 0) + "% of the track." +
       (flagged.length ? " <span class=\"flag\">Shaded:</span> " + esc(tr.target.driver) + "'s speed channel at " + flagged.map(cname).join(", ") +
         " holds a constant value at full throttle while GPS shows the car accelerating, so that dip is a data fault, not a lift; its time loss still comes from the timing channel and is unaffected." : "");
   }
@@ -607,7 +609,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
   function renderStraights(t) {
     var s = S(), box = $("straight-figs");
     box.innerHTML = s.straights.map(function (st, i) {
-      return '<figure class="fig"><figcaption><strong>' + esc(st.name) + "</strong><span>" + f(st.start_m, 0) + "–" + f(st.end_m, 0) + " m from the line · every team's best lap</span></figcaption>" +
+      return '<figure class="fig"><figcaption><strong>' + esc(st.name) + ", " + state.season + "</strong><span>" + f(st.start_m, 0) + "–" + f(st.end_m, 0) + " m from the line · every team's best lap</span></figcaption>" +
         '<div class="chart" id="ch-st-' + i + '" role="img" aria-label="Speed along ' + esc(st.name) + '"></div></figure>';
     }).join("");
     s.straights.forEach(function (st, i) {
@@ -697,9 +699,9 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
   // ------------------------------------------------------------- context
   function renderContext(t) {
     var y1 = YEARS[YEARS.length - 1], y0 = YEARS[0];
-    // Silverstone solid, season average as an outline of the same colour; 2025 grey, 2026 green
-    var groups = [[y0 + " Silverstone", S(y0).section_rates[T], true, t.field], [y0 + " season average", seasonRates(y0), false, t.field],
-                  [y1 + " Silverstone", S(y1).section_rates[T], true, t.amr], [y1 + " season average", seasonRates(y1), false, t.amr]].filter(function (g) { return g[1]; });
+    // This circuit solid, season average as an outline of the same colour; 2025 grey, 2026 green
+    var groups = [[y0 + " " + CIRCUIT, S(y0).section_rates[T], true, t.field], [y0 + " season average", seasonRates(y0), false, t.field],
+                  [y1 + " " + CIRCUIT, S(y1).section_rates[T], true, t.amr], [y1 + " season average", seasonRates(y1), false, t.amr]].filter(function (g) { return g[1]; });
     plot("ch-compare", groups.map(function (g) {
       return { x: SECS.map(function (k) { return SEC_LABEL[k].replace(" corners", ""); }), y: SECS.map(function (k) { return g[1][k]; }), type: "bar", name: g[0],
         marker: { color: g[2] ? g[3] : "rgba(0,0,0,0)", line: { color: g[3], width: g[2] ? 0 : 1.6 } }, hovertemplate: g[0] + " · %{x}: %{y:.2f}%<extra></extra>" };
@@ -717,7 +719,7 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
         hovertemplate: y + " · %{customdata[0]}<br>%{y:.2f}% · %{customdata[1]} of %{customdata[2]}<extra></extra>" });
     });
     var ann = ctx.filter(function (r) { return r.event === R.event; }).map(function (r) {
-      return { x: r.round, y: r.gap_pct, text: "Silverstone " + r.season, showarrow: true, arrowhead: 0, ax: 0, ay: -26, font: { size: 11, color: t.ink2 }, arrowcolor: t.muted };
+      return { x: r.round, y: r.gap_pct, text: CIRCUIT + " " + r.season, showarrow: true, arrowhead: 0, ax: 0, ay: -26, font: { size: 11, color: t.ink2 }, arrowcolor: t.muted };
     });
     plot("ch-context", data, layout(t, { margin: { l: 48, r: 16, t: 8, b: 44 }, showlegend: true, legend: { orientation: "h", y: 1.14, x: 0, font: { size: 11 } },
       xaxis: { title: { text: "round" }, dtick: 2 }, yaxis: { title: { text: "gap to pole, %" }, rangemode: "tozero" }, annotations: ann }));
@@ -729,15 +731,17 @@ footer { padding-block: 32px; border-top: 1px solid var(--rule); }
     var r1 = rank(y1), r0 = rank(y0), a1 = S(y1).section_rates[T], b1 = seasonRates(y1);
     var worstVs = b1 ? SECS.slice().sort(function (p, q) { return (a1[q] - b1[q]) - (a1[p] - b1[p]); })[0] : null;
     var up = S(y0).declared_upgrades || [], ut = S(y0).upgrade_test;
-    var allWorse = b1 && SECS.every(function (k) { return a1[k] > b1[k]; });
-    $("t-context").innerHTML = "In " + y1 + " Silverstone was Aston Martin's " + rankPhrase(r1) + " qualifying gap of " + r1.n + " events; in " + y0 + " its " + rankPhrase(r0) + " of " + r0.n + ". " +
-      (b1 ? "Against its own " + y1 + " average the car lost more at Silverstone " + (allWorse ? "in every section" : "in most sections") + ", most of all in the " + SEC_LABEL[worstVs].toLowerCase() + " (" + f(a1[worstVs], 2) + "% against " + f(b1[worstVs], 2) +
-        "%). " + f(100 * S(y1).track.high_speed_share, 0) + "% of the pole lap here is spent in high-speed corners, the " + (function () {
+    var nWorse = b1 ? SECS.filter(function (k) { return a1[k] > b1[k]; }).length : 0;
+    var worseText = nWorse === 4 ? "more at " + CIRCUIT + " in every section" : nWorse === 0 ? "less at " + CIRCUIT + " in every section" :
+      "more at " + CIRCUIT + " in " + ["no", "one", "two", "three"][nWorse] + " of the four sections";
+    $("t-context").innerHTML = "In " + y1 + " " + CIRCUIT + " was Aston Martin's " + rankPhrase(r1) + " qualifying gap of " + r1.n + " events; in " + y0 + " its " + rankPhrase(r0) + " of " + r0.n + ". " +
+      (b1 ? "Against its own " + y1 + " average the car lost " + worseText + (nWorse ? ", most of all in the " + SEC_LABEL[worstVs].toLowerCase() + " (" + f(a1[worstVs], 2) + "% against " + f(b1[worstVs], 2) + "%)" : "") +
+        ". " + f(100 * S(y1).track.high_speed_share, 0) + "% of the pole lap here is spent in high-speed corners, the " + (function () {
         var c = ctx.filter(function (r) { return String(r.season) === y1 && r.track_x != null; }).sort(function (p, q) { return q.track_x - p.track_x; });
         var i = c.map(function (r) { return r.event; }).indexOf(R.event) + 1;
         return (i === 1 ? "highest" : ord(i) + "-highest") + " share of the " + c.length + " " + y1 + " events analysed";
       })() + ". " : "") +
-      (up.length ? "Aston Martin brought a declared " + esc(up[0].major_performance_upgrade) + " upgrade to Silverstone in " + y0 + " (" + esc(up[0].components) + ")" +
+      (up.length ? "Aston Martin brought a declared " + esc(up[0].major_performance_upgrade) + " upgrade to " + CIRCUIT + " in " + y0 + " (" + esc(up[0].components) + ")" +
         (ut ? "; the season difference-in-differences test finds no measurable change in its gap afterwards (" + sg(ut.effect_pct, 2) + "%, placebo p = " + f(ut.team_placebo_p, 2) + "; the test could detect about " + f(ut.mde_pct, 1) + "% or more)." : ".") : "");
   }
   function seasonRates(y) {

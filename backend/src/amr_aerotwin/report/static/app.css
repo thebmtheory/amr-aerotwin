@@ -124,6 +124,8 @@ table.data { border-collapse: collapse; width: 100%; font-size: var(--step--1); 
 table.data caption { text-align: left; font-weight: 600; color: var(--ink); padding: 0 0 8px; }
 table.data th, table.data td { padding: 6px 10px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
 table.data th { font-weight: 600; color: var(--ink-2); }
+table.data tfoot td { white-space: normal; max-width: 70ch; color: var(--muted); }
+#tbl-did td:last-child, #tbl-did td:nth-child(7) { white-space: normal; min-width: 16ch; }
 table.data td.num, table.data th.num { text-align: right; font-family: var(--font-mono); }
 table.data tr.amr td:first-child { box-shadow: inset 3px 0 0 var(--amr); }
 .pill { display: inline-block; font: 500 0.72rem/1 var(--font-body); padding: 3px 7px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); }

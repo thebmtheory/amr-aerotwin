@@ -14,7 +14,9 @@ from amr_aerotwin.modeling.corner_model import (
 from amr_aerotwin.modeling.season import (
     bayesian_changepoint,
     car_vs_driver_variance,
+    changepoint_count_evidence,
     log_marginal_likelihood,
+    permutation_mde_sd,
     supertime_table,
     upgrade_effects,
 )
@@ -62,6 +64,42 @@ def test_changepoint_finds_a_step_and_stays_quiet_without_one():
     assert cp.effect_ci90_pct[0] < -0.6 + 0.2 and cp.effect_ci90_pct[1] < 0
     flat = bayesian_changepoint(1.2 + rng.normal(0, 0.12, 20))
     assert flat.p_no_change > 0.5
+
+
+def test_model_averaged_step_includes_the_no_change_possibility():
+    rng = np.random.default_rng(5)
+    y = np.concatenate([np.full(9, 1.3), np.full(9, 1.05)]) + rng.normal(0, 0.15, 18)  # a small, uncertain step
+    cp = bayesian_changepoint(y)
+    w0 = cp.p_no_change
+    # Averaging over "no change" shrinks the step toward zero by about P(no change)
+    assert abs(cp.effect_avg_pct) < abs(cp.effect_mean_pct)
+    assert cp.effect_avg_pct == pytest.approx((1 - w0) * cp.effect_mean_pct, abs=0.03)
+    assert cp.effect_avg_ci90_pct[1] >= cp.effect_ci90_pct[1] - 1e-9
+
+
+def test_two_changes_beat_one_for_a_mid_season_peak_but_not_for_a_step():
+    rng = np.random.default_rng(6)
+    peak = np.concatenate([np.full(6, 4.0), np.full(5, 5.5), np.full(6, 3.8)]) + rng.normal(0, 0.2, 17)
+    c = changepoint_count_evidence(peak)
+    assert c["bf_two_vs_one"] > 3 and c["map_pair_index"] == [6, 11]
+    up, down = c["map_pair_steps"]
+    assert up > 1.0 and down < -1.0
+    step = np.concatenate([np.full(9, 4.0), np.full(8, 3.0)]) + rng.normal(0, 0.2, 17)
+    # A single step gives no strong case for two (the report mentions two changes only above 3)
+    assert changepoint_count_evidence(step)["bf_two_vs_one"] < 3
+
+
+def test_permutation_mde_needs_more_than_normal_theory_with_few_placebos():
+    assert permutation_mde_sd(8) == float("inf")  # 1/(1+8) > 0.10: the 10% level is unreachable
+    m9, m10, m200 = permutation_mde_sd(9), permutation_mde_sd(10), permutation_mde_sd(200)
+    assert 2.6 < m9 < 3.0 and 2.6 < m10 < 3.0
+    assert m200 == pytest.approx(2.49, abs=0.05)  # 1.645 + 0.842 in the limit
+    # Check by simulation: an effect of m10 sd is detected about 80% of the time against 10 placebos
+    rng = np.random.default_rng(0)
+    e = rng.normal(m10, 1.0, 4000)
+    pl = np.abs(rng.normal(0, 1, (4000, 10)))
+    p = (1 + (pl >= np.abs(e)[:, None]).sum(1)) / 11
+    assert np.mean(p <= 0.10) == pytest.approx(0.80, abs=0.03)
 
 
 def _panel(effect=-0.5, seed=3, noise=0.1):

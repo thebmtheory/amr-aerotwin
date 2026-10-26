@@ -45,6 +45,17 @@ def _others(rates: dict[str, Any], season: str, off_pace: bool = False) -> dict[
             if t != TARGET and v.get("n_events", 0) >= 5 and (not off_pace or v.get("lap_rate_pct", 0) >= 1)}
 
 
+def first_half_phrase(sp: dict[str, Any]) -> str:
+    """How the gap changes over the first half of the straights, worded by whether its interval includes zero."""
+    v, lo_hi = sp.get("first_half_kmh"), sp.get("first_half_ci90") or [float("nan")] * 2
+    rng = f"[{_f(lo_hi[0], 1)} to {_f(lo_hi[1], 1)}]"
+    if v is None:
+        return "n/a"
+    if lo_hi[0] <= 0 <= lo_hi[1]:
+        return f"holds that through the first half ({_pm(v, 1)} km/h {rng})"
+    return f"{'loses' if v < 0 else 'gains'} {_f(abs(v), 1)} km/h over the first half {rng}"
+
+
 def build_note(season_json: Path, out_md: Path) -> Path:
     s = json.loads(Path(season_json).read_text())
     rates = s.get("section_rates", {})
@@ -103,7 +114,7 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"1. **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Loss rate = time lost to the pole lap "
         f"in a section ÷ the pole lap's time there, summed over events. Aston Martin's 2026 straight-line rate is {_f(st26.get('v'), 2)}% "
         f"[{_f(st26.get('lo'), 2)}, {_f(st26.get('hi'), 2)}] against {_f(a26.get('corner_rate_pct'), 2)}% in the corners, a ratio of "
-        f"{_f(a26.get('straight_to_corner_ratio'), 2)} [{ci(a26.get('straight_to_corner_ci90'), 2)}]. Every other team with five or more non-pole events has a straight-line rate between "
+        f"{_f(a26.get('straight_to_corner_ratio'), 2)} [{ci(a26.get('straight_to_corner_ci90'), 2)}]. Every other team with five or more events has a straight-line rate between "
         f"{_f(min(o_st), 2)}% and {_f(max(o_st), 2)}%; Aston Martin's is {_f(vf.get('ratio'), 2)} times the highest of them ({vf.get('next_team', 'n/a')}) "
         f"[{ci(vf.get('ratio_ci90'), 2)}, the maximum over rivals taken inside each bootstrap draw], so \"twice\" is the central estimate, not a lower bound "
         f"({_f(100 * (vf.get('p_ratio_above_2') or 0), 0)}% of bootstrap draws exceed 2). Teams at least 1% off pole over a lap have straights-to-corners ratios between "
@@ -113,7 +124,7 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"{_f(a25.get('straight_to_corner_ratio'), 2)} [{ci(a25.get('straight_to_corner_ci90'), 2)}], {field25}. Raw seconds by corner type are misleading "
         "here: cars spend the most time in slow corners, so slow corners carry the most seconds for almost every team.",
         f"2. **Where on the straight.** Compared piece by piece along the main straights (those clear of the timing line), Aston Martin starts {_f(-(b0.get('gap_kmh') or 0), 1)} km/h "
-        f"down, holds that through the first half ({_pm(sp26.get('first_half_kmh'), 1)} km/h [{ci(sp26.get('first_half_ci90'))}]) and loses {_f(-(sp26.get('second_half_kmh') or 0), 1)} km/h more "
+        f"down, {first_half_phrase(sp26)} and loses {_f(-(sp26.get('second_half_kmh') or 0), 1)} km/h more "
         f"in the second half [{ci(sp26.get('second_half_ci90'))}], at full throttle, on {sp26.get('n_straights_losing_late')} of {sp26.get('n_straights')} main straights at {sp26.get('n_events')} events "
         f"(leaving out any one event: {ci(sorted(sp26.get('second_half_loo_range') or []))}). A late loss alone is not unusual: {late_team} loses {_f(late_kmh, 1)} km/h in the second half too, the next largest, "
         f"and several teams show smaller ones in both seasons. What sets Aston Martin apart is the size of both parts: no other team starts the straights more than {_f(max_start, 1)} km/h off the field. "
@@ -276,8 +287,10 @@ def readme_blocks(s: dict[str, Any]) -> dict[str, str]:
         + ("Every other team" if ratios and max(ratios) < 1 else "Most teams") + " more than 1% off pole loses less per second "
         f"on the straights than in the corners (ratios {_f(min(ratios), 2)} to {_f(max(ratios), 2)}, against {_f(a26.get('straight_to_corner_ratio'), 2)} for Aston Martin)"
         + (f", as did Aston Martin in 2025 ({_f(a25.get('straight_to_corner_ratio'), 2)})." if (a25.get("straight_to_corner_ratio") or 9) < 1 else "."),
-        f"- **The straight-line loss starts at the corner exit and grows late.** On the main straights the car starts {_f(-(b0.get('gap_kmh') or 0), 1)} km/h down, where no other "
-        f"team is more than {_f(max_start, 1)} km/h off the field, and loses {_f(-(sp26.get('second_half_kmh') or 0), 1)} km/h more in the second half (90% interval "
+        f"- **The straight-line loss starts at the corner exit and {'grows along the straight' if (sp26.get('first_half_ci90') or [0, 0])[1] < 0 else 'grows late'}.** "
+        f"On the main straights the car starts {_f(-(b0.get('gap_kmh') or 0), 1)} km/h down, where no other team is more than {_f(max_start, 1)} km/h off the field, "
+        + (f"loses {_f(-(sp26.get('first_half_kmh') or 0), 1)} km/h over the first half and " if (sp26.get('first_half_ci90') or [0, 0])[1] < 0 else "and loses ")
+        + f"{_f(-(sp26.get('second_half_kmh') or 0), 1)} km/h more in the second half (90% interval "
         f"{_f(-(sp26.get('second_half_ci90') or [0, 0])[1], 1)} to {_f(-(sp26.get('second_half_ci90') or [0, 0])[0], 1)}), at full throttle, on {sp26.get('n_straights_losing_late')} of "
         f"{sp26.get('n_straights')} main straights at {sp26.get('n_events')} events; the next largest late loss is {late_team}'s ({_f(late_kmh, 1)} km/h). Extra drag, deployment ending "
         "earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.",

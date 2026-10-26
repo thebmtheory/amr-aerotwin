@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 export PYTHONPATH := backend/src
 
-.PHONY: install test lint fetch build analyse report all serve event-report
+.PHONY: install test lint fetch build analyse report all serve event-report figures
 
 install:
 	python3 -m venv .venv && $(PY) -m pip install -e ".[dev]"
@@ -34,3 +34,7 @@ event-report:
 
 serve:
 	$(PY) -m http.server 8765 --directory site
+
+# README images from the served site (needs Google Chrome and Node 22+; run `make serve` first)
+figures:
+	node scripts/figures.mjs http://localhost:8765/ docs/img

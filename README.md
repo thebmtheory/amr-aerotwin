@@ -13,13 +13,33 @@ validated out of sample, and an interactive report.
 
 <!-- findings:start -->
 - **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent in each part of the lap, it loses 4.0% on the straights against at most 1.9% for any other team (Cadillac, 3.99% off pole over a lap against Aston Martin's 4.15%): 2.1 times as much, 90% interval 1.6 to 2.8. Every other team more than 1% off pole loses less per second on the straights than in the corners (ratios 0.27 to 0.68, against 0.94 for Aston Martin), as did Aston Martin in 2025 (0.19).
-- **The straight-line loss starts at the corner exit and grows late.** On the main straights the car starts 5.2 km/h down, where no other team is more than 4.0 km/h off the field, and loses 3.4 km/h more in the second half (90% interval 1.9 to 5.0), at full throttle, on 8 of 10 main straights at 7 events; the next largest late loss is McLaren's (2.0 km/h). Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.
+- **The straight-line loss starts at the corner exit and grows along the straight.** On the main straights the car starts 5.2 km/h down, where no other team is more than 4.0 km/h off the field, loses 2.8 km/h over the first half and 3.4 km/h more in the second half (90% interval 1.9 to 5.0), at full throttle, on 8 of 10 main straights at 7 events; the next largest late loss is McLaren's (2.0 km/h). Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.
 - **The teams decide the 2026 qualifying order:** between-team differences (car and driver line-up together) explain 90% (90% interval 83 to 94) of the variance in qualifying gaps, against 48% in 2025.
 - **What did not survive review is withdrawn, not hidden.** An early 36 kW power-deficit claim (an artefact of road gradient and unlike-for-like comparison), a "slow corners are the biggest loss" claim (cars simply spend most time there) and two wind claims (wind data proved uninformative) are documented as withdrawn in the technical note.
 <!-- findings:end -->
 
 Exact figures and 90% intervals are in the technical note, which is generated from
 `data/processed/season.json`, so the text cannot drift from the data.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/loss-rates-dark.png">
+    <img src="docs/img/loss-rates-light.png" width="560" alt="Loss rate on the straights against loss rate in the corners for every 2026 team: Aston Martin sits close to the equal-rate line, every other team far below it">
+  </picture>
+</p>
+
+At Silverstone in 2026 the car was the slowest of the eleven teams, and more than half of its gap to Cadillac, the team directly ahead, was on the straights. On the Hangar Straight it lost more speed at full throttle than any other car ([event report](reports/british-grand-prix.html)):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/silverstone-gap-dark.png">
+    <img src="docs/img/silverstone-gap-light.png" width="420" alt="Waterfall of the time Aston Martin lost to Cadillac in 2026 Silverstone qualifying, by section: the straights are the largest part, followed by high-, medium- and low-speed corners">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/silverstone-straights-dark.png">
+    <img src="docs/img/silverstone-straights-light.png" width="420" alt="Speed along the Hangar Straight at Silverstone 2026 for every team's best lap: Aston Martin is slowest and its speed falls in the second half, more than any other car's">
+  </picture>
+</p>
 
 ## What is in here
 
@@ -62,12 +82,15 @@ make serve
 ## How it is tested
 
 - Physics against analytic answers: a constant-radius circle settles on the friction ellipse, a long straight reaches the drag-limited terminal speed, braking distance matches kinematics, curvature of a circle is 1/R.
-- Statistical recovery on synthetic data with known truth: lap-sim parameters, grip lines, drag and power, fuel and tyre effects, changepoints, upgrade effects. Interval *coverage* is checked by Monte Carlo, not just point estimates.
+- Alignment against independent clocks: a synthetic lap with an offset clock must come out with the true time and speed at every point; on real laps the aligned clock is checked against the official sector times from the timing loops, and that check is a data gate.
+- Data faults injected on real laps: a held speed channel (car-data stall) must be caught without moving any other lap's score; frozen data and the feed's invalid-throttle marker are tested the same way.
+- Statistical recovery on synthetic data with known truth: lap-sim parameters, grip lines, drag and power, fuel and tyre effects, one and two changepoints, upgrade effects. Interval *coverage* is checked by Monte Carlo, not just point estimates: event-bootstrap intervals with five to twelve events, race-pace intervals with autocorrelated errors, conformal intervals, and the permutation test's minimum detectable effect.
 - Leakage guards: the corner model's folds never split a circuit (so a 2025 and a 2026 race at the same track are never in different folds), and target speeds are never features.
-- Exact Shapley efficiency, conformal coverage, placebo-test calibration under the null, and race-pace interval coverage with autocorrelated errors.
-- Independent review: separate physics, statistics and code reviews were run against the full results, and every claim in the report was revised to what survived them.
+- Exact Shapley efficiency and placebo-test calibration under the null.
 - The JavaScript simulator matches the Python one to 1e-9.
 - An end-to-end run on real Silverstone data must close on the official lap-time gap.
+- Reproducibility: two full rebuilds from the cache give identical outputs; CI runs ruff, mypy and the tests on a fresh install.
+- Independent review: separate physics, statistics and claims reviews were run against the full results; every finding they confirmed was fixed or the claim revised, and the README findings and technical note are generated from the results so no number is typed by hand.
 
 ## Data quality gates
 

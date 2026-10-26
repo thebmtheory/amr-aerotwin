@@ -169,3 +169,35 @@ def test_a_shifted_lap_clock_is_re_timed_not_moved_along_the_track(offset):
     assert np.max(np.abs(lap.time_s[inner] - t_true[inner])) < 0.02
     assert np.max(np.abs(lap.speed_ms[inner] - v_true[inner])) < 0.3
     assert abs(lap.quality["start_line_gap_m"]) == pytest.approx(abs(offset) * v0, rel=0.25)  # reported, not hidden
+
+
+def test_sector_time_check_matches_official_sectors_and_flags_a_shifted_clock():
+    """The aligned clock must read each lap's official sector times at the sector lines; a lap
+    whose time channel is off in the middle of the lap (not at the line) is flagged."""
+    import dataclasses
+
+    from amr_aerotwin.modeling.validation import sector_time_errors_s
+
+    ripple, v0, period = 8.0, 60.0, 7.0
+    raw0, t_lap = circle_lap_telemetry(speed_ripple_ms=ripple)
+    ref = build_reference_line(parse_raw_lap(raw0), t_lap)
+    laps = {}
+    for i, off in enumerate([0.0, 0.1, -0.15, 0.2, 0.05, -0.05]):
+        raw, _ = circle_lap_telemetry(speed_ripple_ms=ripple, clock_offset_s=off, seed=i)
+        lap = align_lap(parse_raw_lap(raw), _meta(t_lap), AMB, ref)
+        # Official sectors at a third and two thirds of the lap distance, from the true motion
+        fine = np.linspace(0, t_lap, 20001)
+        dist = v0 * fine + ripple * period / (2 * np.pi) * (1 - np.cos(2 * np.pi * fine / period))
+        t1, t2 = np.interp([dist[-1] / 3, 2 * dist[-1] / 3], dist, fine)
+        meta = dataclasses.replace(lap.meta, driver=f"D{i}", sector_times_s=(t1, t2 - t1, t_lap - t2))
+        laps[f"D{i}"] = dataclasses.replace(lap, meta=meta)
+    err = sector_time_errors_s(laps)
+    assert max(abs(v) for v in err.values()) < 0.01
+    bad = laps["D3"]
+    t = bad.time_s.copy()
+    mid = (bad.distance_m > ref.length_m * 0.25) & (bad.distance_m < ref.length_m * 0.75)
+    t[mid] += 0.3  # a clock error inside the lap: line crossings still look fine
+    laps["D3"] = dataclasses.replace(bad, time_s=t)
+    err = sector_time_errors_s(laps)
+    assert err["D3"] == pytest.approx(0.3, abs=0.02)
+    assert max(abs(v) for k, v in err.items() if k != "D3") < 0.01

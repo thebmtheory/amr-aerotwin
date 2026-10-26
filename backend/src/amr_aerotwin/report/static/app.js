@@ -10,7 +10,8 @@
   // ------------------------------------------------------------------ helpers
   function $(id) { return document.getElementById(id); }
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-  function f(x, d) { return x == null || !isFinite(x) ? "–" : Number(x).toFixed(d == null ? 1 : d); }
+  // Typographic minus; a value that rounds to zero loses its sign
+  function f(x, d) { return x == null || !isFinite(x) ? "–" : Number(x).toFixed(d == null ? 1 : d).replace(/^-(?=.*[1-9])/, "−").replace(/^-/, ""); }
   function sgn(x, d) { return x == null || !isFinite(x) ? "–" : (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(x).toFixed(d == null ? 1 : d); }
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
   function short(ev) { return ev.replace(" Grand Prix", ""); }
@@ -92,8 +93,8 @@
     fill("hero_lede",
       "Measured as a share of the time spent in each part of the lap, " + (Math.max.apply(null, ratioOthers) < 1 ? "every other team more than 1% off pole loses its time faster in the corners than on the straights" : "most teams more than 1% off pole lose their time faster in the corners than on the straights") +
       (a25.straight_to_corner_ratio < 1 ? ", and so did Aston Martin in 2025" : "") + ". In 2026 it loses " +
-      f(st26.v, 1) + "% of its straight-line time (90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "%), close to its " + f(a26.corner_rate_pct, 1) + "% in the corners. Every other team with five or more non-pole events has a straight-line rate between " +
-      f(Math.min.apply(null, stOthers), 1) + "% and " + f(Math.max.apply(null, stOthers), 1) + "%. Cadillac, almost exactly as slow over a lap (" + f(cad.lap_rate_pct, 2) + "% vs " + f(a26.lap_rate_pct, 2) +
+      f(st26.v, 1) + "% of its straight-line time (90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "%), close to its " + f(a26.corner_rate_pct, 1) + "% in the corners. Every other team with five or more events has a straight-line rate between " +
+      f(Math.min.apply(null, stOthers), 1) + "% and " + f(Math.max.apply(null, stOthers), 1) + "%. Cadillac, about as slow over a lap (" + f(cad.lap_rate_pct, 2) + "% vs " + f(a26.lap_rate_pct, 2) +
       "%), loses " + f(cadSt.v, 1) + "% on the straights. On " + SP26.n_straights_losing_late + " of " + SP26.n_straights + " main straights Aston Martin's speed gap also grows in the second half, by " + f(-SP26.second_half_kmh, 1) + " km/h on average, at full throttle.");
     var tiles = [
       { k: "Straight-line loss rate, 2026", v: f(st26.v, 1) + "%", ci: "90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "% · " + f(vf.ratio, 1) + "× the next team (" + esc(vf.next_team || "–") + "), CI " + ci(vf.ratio_ci90, 1), amr: true },
@@ -110,10 +111,14 @@
     fill("hero_note", "Loss rate = time lost to the pole lap in a section ÷ time the pole lap spends there, summed over events. A car that is uniformly slower has equal rates everywhere, so rates (not seconds) show where a car is weak; in seconds, slow corners always dominate because cars spend the most time there. Comparisons use the same piece of track, so geometry and gradient cancel, but laps can be set at different times of the session: track evolution mostly adds grip, which inflates corner rates more than straight-line ones. “Pole lap” means the fastest lap of qualifying (at 2025 Hungary that was a Q2 lap, faster than the Q3 pole). Wet qualifying (2025 Las Vegas) is left out. Intervals are 90% bootstrap intervals over events, widened for small samples (expanded percentile bootstrap; plain percentile intervals cover only about 80% with five to ten events).");
 
     fill("finding_text", "Splitting each main straight into ten equal pieces and comparing speeds piece by piece shows where the straight-line time goes. Aston Martin starts the straights " + f(-((SP26.bins || [])[0] || {}).gap_kmh, 1) +
-      " km/h down, holds that through the first half (" + f(SP26.first_half_kmh, 1) + " km/h, CI " + ci(SP26.first_half_ci90, 1) + ") and loses " + f(-SP26.second_half_kmh, 1) + " km/h more in the second half (CI " + ci(SP26.second_half_ci90, 1) +
+      " km/h down, " + (function () {
+        var c = SP26.first_half_ci90 || [NaN, NaN];
+        return c[0] <= 0 && c[1] >= 0 ? "holds that through the first half (" + f(SP26.first_half_kmh, 1) + " km/h, CI " + ci(c, 1) + ") and loses "
+          : (SP26.first_half_kmh < 0 ? "loses " : "gains ") + f(Math.abs(SP26.first_half_kmh), 1) + " km/h over the first half (CI " + ci(c, 1) + ") and ";
+      })() + f(-SP26.second_half_kmh, 1) + " km/h more in the second half (CI " + ci(SP26.second_half_ci90, 1) +
       "), at full throttle: its drivers are not lifting early. The loss appears on " + SP26.n_straights_losing_late + " of " + SP26.n_straights + " main straights that start and end away from the timing line (" + SP26.n_events +
       " events); leaving out any one event keeps the average between " + f((SP26.second_half_loo_range || [])[1], 1) + " and " + f((SP26.second_half_loo_range || [])[0], 1) +
-      " km/h. Holding the gap while starting slower already means weaker acceleration than the field. The shape does not identify the cause: a point-mass simulation reproduces it with extra drag alone, and energy deployment ending earlier or harvesting at full throttle fit as well. " +
+      " km/h. " + ((SP26.first_half_ci90 || [0, 0])[1] < 0 ? "Losing ground from the first metres means weaker acceleration than the field, not only a lower top speed. " : "Holding the gap while starting slower already means weaker acceleration than the field. ") + "The shape does not identify the cause: a point-mass simulation reproduces it with extra drag alone, and energy deployment ending earlier or harvesting at full throttle fit as well. " +
       (function () {
         var o = ((S.straight_profile || {})["2026"]) || {}, rows = Object.keys(o).filter(function (k) { return k !== TARGET && o[k].second_half_kmh != null; });
         if (!rows.length) return "";
@@ -139,12 +144,12 @@
         ". A changepoint model that is not told upgrade dates rates the " + esc(CP26.map_event || "–") + " the most likely place for a single shift in its qualifying pace (posterior " + f(CP26.map_probability, 2) +
         ", against " + f(CP26.p_no_change, 2) + " for no change; " + f(Math.min.apply(null, p0s), 2) + "–" + f(Math.max.apply(null, p0s), 2) + " across the prior settings tried). Given a change, the step is " +
         sgn(CP26.effect_pct, 2) + "% of lap time (CI " + ci(CP26.effect_ci90_pct, 2) + "); allowing for no change it averages " + sgn(CP26.effect_avg_pct, 2) + "% (CI " + ci(CP26.effect_avg_ci90_pct, 2) + "). " +
-        (CP26.two_change_events && CP26.bf_two_vs_one > 3 ? "But the season fits a rise and a fall better than one step: a model with two changes (" + sgn((CP26.two_change_steps_pct || [])[0], 1) + "% at the " + esc(short(CP26.two_change_events[0])) +
-          ", " + sgn((CP26.two_change_steps_pct || [])[1], 1) + "% at the " + esc(short(CP26.two_change_events[1])) + ") is " + f(CP26.bf_two_vs_one, 1) + " times more likely, so much of the drop undoes a mid-season peak. " : "") +
+        (CP26.two_change_events && CP26.bf_two_vs_one > 3 ? "But the season fits a rise and a fall better than one step: a model with two changes (" + sgn((CP26.two_change_steps_pct || [])[0], 1) + "% at the " + esc(CP26.two_change_events[0]) +
+          ", " + sgn((CP26.two_change_steps_pct || [])[1], 1) + "% at the " + esc(CP26.two_change_events[1]) + ") is " + f(CP26.bf_two_vs_one, 1) + " times more likely, so much of the drop undoes a mid-season peak. " : "") +
         "Fast-corner grip relative to the other teams went from " + f(gh.before.mean * 100, 1) + "% to " + f(gh.after.mean * 100, 1) + "% (" + gh.before.n + " events before, only " + gh.after.n +
         " after with clean geometry). The difference-in-differences test cannot settle it either: Aston Martin’s own 2026 estimates vary about " + f(uh.noise_ratio, 0) +
         " times more than any rival’s, so beating every rival’s placebo means little, and against its own " + (uh.n_time_placebos || "–") + " other dates no test can go below p = " + f(1 / (1 + (uh.n_time_placebos || 0)), 2) +
-        " (the " + esc(short(UPG.event)) + " gets " + f(uh.time_placebo_p, 2) + "). Suggestive, not established.");
+        " (the " + esc(UPG.event) + " gets " + f(uh.time_placebo_p, 2) + "). Suggestive, not established.");
     }
   }
   function declaredParts(event, season) {

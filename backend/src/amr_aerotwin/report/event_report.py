@@ -10,6 +10,7 @@ the straights.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from pathlib import Path
@@ -305,6 +306,9 @@ def render_event_report(data: dict[str, Any]) -> str:
     """The page body (title, styles, markup, scripts) with the data embedded."""
     page = (STATIC / "event_report.html").read_text(encoding="utf-8")
     payload = json.dumps(_clean(_r(data, 4)), separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
+    latest = data["seasons"][max(data["seasons"])] if data.get("seasons") else {}
+    circuit = html.escape(str(latest.get("circuit") or data["event"]))
+    page = page.replace("__CIRCUIT__", circuit).replace("__EVENT__", html.escape(str(data["event"])))
     return page.replace("/*REPORT_DATA*/null", payload)
 
 
