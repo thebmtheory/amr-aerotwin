@@ -25,7 +25,7 @@
 <main id="top">
   <section class="hero wrap">
     <p class="eyebrow">Independent analysis of public timing data · 2025 and 2026 seasons · <span data-fill="n_events"></span> Grands Prix</p>
-    <h1>Aston Martin loses its time in slow corners, and in 2026 it pays for them again at the end of every straight.</h1>
+    <h1>In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.</h1>
     <p class="lede" data-fill="hero_lede"></p>
     <div class="tiles" id="tiles"></div>
     <p class="note" data-fill="hero_note"></p>
@@ -36,11 +36,12 @@
       <h2>Where the gap comes from</h2>
       <div class="grid2">
         <figure class="fig">
-          <figcaption><strong>Aston Martin’s qualifying gap to pole by type of track section</strong> <span>s per lap, mean over events · 90% interval</span></figcaption>
-          <div id="ch-gapclass" class="chart" role="img" aria-label="Gap to pole by corner class, 2025 and 2026"></div>
+          <figcaption><strong>Loss rate to pole: corners vs straights, every team</strong> <span>% of the pole lap's time in each, summed over events · bars = 90% interval</span></figcaption>
+          <div class="seg" id="seg-rates"></div>
+          <div id="ch-rates" class="chart square" role="img" aria-label="Corner vs straight loss rates by team"></div>
         </figure>
         <div class="prose">
-          <p>Each lap is aligned with the pole lap and the time difference is split into the braking, apex and exit phases of every corner (120 m either side of the marker), grouped by how fast the corner is, plus everything in between. The split adds up to the official gap exactly.</p>
+          <p>Each team’s best lap is aligned with the pole lap and the time difference is split into corners (braking, apex and exit, 120 m either side of each marker) and everything in between. Dividing the time lost in each by the time the pole lap spends there gives a loss rate. Points below the diagonal lose less per second on the straights than in the corners; in both seasons almost every team sits well below it.</p>
           <p data-fill="decomp_text"></p>
         </div>
       </div>
@@ -93,7 +94,7 @@
       </figure>
     </div>
     <div class="table-wrap">
-      <table class="data" id="tbl-did"><caption>Declared upgrades: difference-in-differences against rivals, 4 events either side, with placebo tests</caption></table>
+      <table class="data" id="tbl-did"><caption>Declared upgrades: difference-in-differences against rivals, 4 events either side. Team-placebo p cannot go below 1/(1 + number of rivals) ≈ 0.09–0.10.</caption></table>
     </div>
   </section>
 
@@ -226,8 +227,8 @@
         <p class="small" data-fill="var_text"></p>
       </figure>
       <figure class="fig">
-        <figcaption><strong>Does wind change corner speed?</strong> <span>km/h per m/s of headwind · same corner, different wind</span></figcaption>
-        <div id="ch-wind" class="chart short" role="img" aria-label="Wind sensitivity"></div>
+        <figcaption><strong>Can the wind correction be trusted?</strong> <span>fit residual vs ground speed when wind is rotated, mean over windy sessions</span></figcaption>
+        <div id="ch-wind" class="chart short" role="img" aria-label="Wind frame rotation test"></div>
         <p class="small" data-fill="wind_text"></p>
       </figure>
     </div>

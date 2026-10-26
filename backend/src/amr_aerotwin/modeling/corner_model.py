@@ -2,9 +2,10 @@
 
 Each row is one corner on one driver's fastest qualifying lap. The target is the minimum
 speed through the corner. Features are things the driver does not control on that lap:
-corner geometry (from the multi-driver consensus path), air density, the headwind
-component at the corner, track temperature, tyre age and season. The target never enters
-a feature, which is what the original prototype got wrong.
+corner geometry (from the multi-driver consensus path), air density, track temperature,
+tyre age and season. The target never enters a feature, which is what the original
+prototype got wrong. Headwind is not used: the timing frame's compass orientation is
+unverified (see `powertrain.wind_rotation_test`), so per-corner wind components are unreliable.
 
 Models, all evaluated with GroupKFold over *circuits* (every event at a circuit, in both
 seasons, is held out together, so the model never sees the test track):
@@ -40,7 +41,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import GroupKFold
 
 NUMERIC_FEATURES = [
-    "radius_m", "turn_angle_deg", "approach_m", "rho_kg_m3", "headwind_ms",
+    "radius_m", "turn_angle_deg", "approach_m", "rho_kg_m3",
     "track_temp_c", "tyre_life", "season_2026",
 ]
 V_CAP_KMH = 345.0
@@ -200,39 +201,6 @@ def team_corner_deficit(oof: pd.DataFrame, n_boot: int = 400, seed: int = 4) -> 
             "ci_lo": float(np.nanpercentile(boots, 5)), "ci_hi": float(np.nanpercentile(boots, 95)),
             "n_events": int(by_ev.size),
         })
-    return pd.DataFrame(rows)
-
-
-def wind_sensitivity(df: pd.DataFrame, n_boot: int = 400, seed: int = 6) -> pd.DataFrame:
-    """Effect of headwind on corner minimum speed (km/h per m/s), by corner speed class.
-
-    Identification: corner fixed effects (same corner across seasons and laps) and
-    team-season fixed effects absorb geometry and car pace; the headwind coefficient is
-    then estimated from the same corner driven under different wind. Bootstrap over events.
-    """
-    rows = []
-    rng = np.random.default_rng(seed)
-    for cls, g in df.groupby("speed_class"):
-        g = g.reset_index(drop=True)
-        if len(g) < 200:
-            continue
-
-        def coef(d: pd.DataFrame) -> float:
-            x = pd.concat([
-                pd.get_dummies(d["circuit_corner"], dtype=float),
-                pd.get_dummies(d["team"] + d["season"].astype(str), dtype=float).iloc[:, 1:],
-                d[["headwind_ms", "rho_kg_m3", "track_temp_c"]],
-            ], axis=1).to_numpy(float)
-            return float(np.linalg.lstsq(x, d["v_min_kmh"].to_numpy(float), rcond=None)[0][-3])
-
-        est = coef(g)
-        events = g["event_key"].unique()
-        boots = []
-        for _ in range(n_boot):
-            pick = rng.choice(events, len(events))
-            boots.append(coef(pd.concat([g[g["event_key"] == e] for e in pick], ignore_index=True)))
-        rows.append({"speed_class": cls, "kmh_per_ms_headwind": est,
-                     "ci_lo": float(np.percentile(boots, 5)), "ci_hi": float(np.percentile(boots, 95)), "n": len(g)})
     return pd.DataFrame(rows)
 
 

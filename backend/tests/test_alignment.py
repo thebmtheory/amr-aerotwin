@@ -94,3 +94,27 @@ def test_alignment_on_real_silverstone_laps_closes_on_official_gap(fixture_repo)
     assert out["ALO"].time_s[-1] - out["VER"].time_s[-1] == pytest.approx(gap, abs=0.01)
     assert 0.05 < out["ALO"].quality["gps_lag_s"] < 0.25  # the archive's car-data stream trails GPS
     assert out["ALO"].quality["projection_rms_m"] < 4.0
+
+
+def test_frozen_car_data_is_detected():
+    from amr_aerotwin.data.alignment import longest_frozen_run_m
+
+    raw, t_lap = circle_lap_telemetry(speed_ripple_ms=8.0)
+    lap = parse_raw_lap(raw)
+    s = lap.distance_m
+    sel = np.ones(len(s), dtype=bool)
+    assert longest_frozen_run_m(lap, sel, s) < 20.0
+    frozen = (s > 1000) & (s < 1250)
+    for ch in (lap.speed_ms, lap.rpm):
+        ch[frozen] = ch[frozen][0]
+    assert longest_frozen_run_m(lap, sel, s) > 200.0
+
+
+def test_invalid_throttle_marker_is_repaired_not_kept():
+    raw, _ = circle_lap_telemetry()
+    raw["throttle"][10] = 104.0
+    raw["brake"][10] = 1
+    raw["throttle"][20] = 104.0
+    lap = parse_raw_lap(raw)
+    assert lap.throttle_pct.max() <= 100.0
+    assert 0.0 in lap.throttle_pct  # braking sample read as zero throttle

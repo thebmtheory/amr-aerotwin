@@ -204,6 +204,7 @@ class UpgradeEffect:
     n_post: int
     placebo_sd_pct: float  # spread of team placebos: the noise level of this design
     mde_pct: float  # minimum detectable effect, ~80% power at 10% two-sided (2.5 placebo sd)
+    p_floor: float  # smallest team-placebo p this design can produce: 1 / (1 + number of rivals)
     overlapping: list[str]  # other declared upgrades inside this window
     placebo_effects: list[float]
 
@@ -289,6 +290,7 @@ def upgrade_effects(
             season=int(up["season"]), event=str(up["event"]), effect_pct=eff,
             team_placebo_p=pval(team_pl), time_placebo_p=pval(time_pl),
             n_pre=n_pre, n_post=n_post, placebo_sd_pct=sd_pl, mde_pct=2.5 * sd_pl,
+            p_floor=1.0 / (1 + len(team_pl)) if team_pl else float("nan"),
             overlapping=overlapping, placebo_effects=team_pl + time_pl,
         ))
     return out

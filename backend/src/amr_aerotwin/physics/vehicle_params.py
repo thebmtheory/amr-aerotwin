@@ -17,21 +17,7 @@ with q_low / q_high fixed per event (shared by all teams), so comparisons are li
 like. Corners taken flat out are excluded because the car has spare grip there.
 Uncertainty is a bootstrap over corners (the independent unit), not grid points.
 
-Drag and power on straights
----------------------------
-At full throttle with no braking and negligible lateral load:
-
-    m * a_x + m * g * Crr  =  P / v  -  q * CdA  [-  q * dCdA * DRS]
-
-which is linear in (P, CdA, dCdA). P and CdA are strongly collinear along a straight (both
-terms fall with speed), so individually they carry wide intervals; their ratio is well
-determined and is reported as the drag-limited top speed v_inf = (2 P / (rho0 CdA))^(1/3)
-at a standard density rho0 = 1.2 kg/m^3. This mixes power-unit output and drag, and is
-labelled that way. Bootstrap resamples whole straights.
-
-Mass is the regulation minimum plus an assumed fuel load; P is wheel power. In 2026 the
-MGU-K power tapers above 290 km/h and battery state changes along a straight, so 2026 drag
-fits use speeds below the taper only (`max_speed_kmh`).
+Straight-line performance is analysed in `modeling/powertrain.py` and `modeling/energy.py`.
 """
 
 from __future__ import annotations
@@ -47,7 +33,6 @@ from amr_aerotwin.domain import GRAVITY_ACCEL
 from amr_aerotwin.physics.dynamics import VehicleState
 
 CRR = 0.012
-RHO_STANDARD = 1.2
 MIN_LIMIT_LAT_G = 2.0
 
 
@@ -70,23 +55,6 @@ class GripFit:
     points: pd.DataFrame
 
 
-@dataclass(frozen=True)
-class DragFit:
-    power_kw: float
-    cda_m2: float
-    delta_cda_low_drag_m2: float
-    power_ci90: tuple[float, float]
-    cda_ci90: tuple[float, float]
-    power_samples: NDArray[np.float64]
-    cda_samples: NDArray[np.float64]
-    v_inf_kmh: float
-    v_inf_ci90: tuple[float, float]
-    v_inf_samples: NDArray[np.float64]
-    n_segments: int
-    n_points: int
-    residual_sd_ms2: float
-
-
 def corner_limit_points(
     state: VehicleState,
     corner_distance_m: NDArray[np.float64],
@@ -106,7 +74,7 @@ def corner_limit_points(
         idx = np.flatnonzero(win)[np.argmax(np.abs(state.ay_ms2[win]))]
         ay = abs(float(state.ay_ms2[idx]))
         # Longitudinal *tyre* acceleration: remove aero drag and rolling resistance
-        ax = float(state.ax_ms2[idx] + state.q_dyn_pa[idx] * cda_for_tyre_force_m2 / state.mass_kg
+        ax = float(state.ax_propulsive_ms2[idx] + state.q_dyn_pa[idx] * cda_for_tyre_force_m2 / state.mass_kg
                    + GRAVITY_ACCEL * CRR)
         rows.append(
             {
@@ -184,13 +152,23 @@ def fit_grip_vs_q(
     )
 
 
+LINE_MARGIN_M = 20.0
+
+
 def straight_segments(
     state: VehicleState,
     min_length_m: float = 200.0,
     trim_m: float = 30.0,
     max_speed_kmh: float | None = None,
+    drop_line_cut: bool = False,
 ) -> list[NDArray[np.int64]]:
-    """Index arrays of full-throttle, no-brake, low-lateral-load runs (trimmed at both ends)."""
+    """Index arrays of full-throttle, no-brake, low-lateral-load runs (trimmed at both ends).
+
+    The 20 m either side of the timing line are always excluded (the lap's speed trace is
+    discontinuous there). A straight that crosses the line is therefore cut in two; with
+    `drop_line_cut=True` those pieces are dropped, because they start or end mid-straight and
+    would be mistaken for a corner exit or a braking point.
+    """
     lap = state.lap
     ok = (
         (lap.throttle_pct >= 99.0)
@@ -201,77 +179,20 @@ def straight_segments(
     if max_speed_kmh is not None:
         ok &= state.speed_smooth_ms * 3.6 <= max_speed_kmh
     step = lap.grid_step_m
+    margin = int(round(LINE_MARGIN_M / step))
+    ok[:margin] = False
+    ok[len(ok) - margin:] = False
     trim = int(round(trim_m / step))
     segs: list[NDArray[np.int64]] = []
     idx = np.flatnonzero(ok)
     if len(idx) == 0:
         return segs
     breaks = np.flatnonzero(np.diff(idx) > 1)
+    n = len(ok)
     for run in np.split(idx, breaks + 1):
+        if drop_line_cut and (run[0] <= margin or run[-1] >= n - margin - 1):
+            continue
         run = run[trim: len(run) - trim] if len(run) > 2 * trim else run[:0]
         if len(run) * step >= min_length_m:
             segs.append(run)
     return segs
-
-
-def fit_drag_power(
-    states: list[VehicleState],
-    fit_low_drag: bool = True,
-    max_speed_kmh: float | None = None,
-    n_boot: int = 400,
-    seed: int = 5,
-) -> DragFit | None:
-    """Least-squares fit of (P, CdA, dCdA) on full-throttle straights of one or more laps."""
-    blocks = []
-    for st in states:
-        m = st.mass_kg
-        for seg in straight_segments(st, max_speed_kmh=max_speed_kmh):
-            v = st.speed_smooth_ms[seg]
-            q = st.q_dyn_pa[seg]
-            y = m * st.ax_ms2[seg] + m * GRAVITY_ACCEL * CRR
-            cols = [1.0 / v, -q]
-            if fit_low_drag:
-                cols.append(-q * st.lap.drs[seg])
-            blocks.append((np.column_stack(cols), y))
-    if len(blocks) < 3:
-        return None
-    use_drs = fit_low_drag and any(np.any(b[0][:, 2] != 0) for b in blocks)
-    if not use_drs:
-        blocks = [(b[0][:, :2], b[1]) for b in blocks]
-
-    def solve(sel: list[int]) -> NDArray[np.float64]:
-        x = np.vstack([blocks[i][0] for i in sel])
-        y = np.concatenate([blocks[i][1] for i in sel])
-        return np.linalg.lstsq(x, y, rcond=None)[0]
-
-    allidx = list(range(len(blocks)))
-    beta = solve(allidx)
-    x_all = np.vstack([b[0] for b in blocks])
-    y_all = np.concatenate([b[1] for b in blocks])
-    resid = y_all - x_all @ beta
-    mass = states[0].mass_kg
-
-    rng = np.random.default_rng(seed)
-    boots = np.array([solve(list(rng.choice(allidx, len(allidx), replace=True))) for _ in range(n_boot)])
-
-    def v_inf(p_w: NDArray[np.float64], cda: NDArray[np.float64]) -> NDArray[np.float64]:
-        ratio = np.where(cda > 0, p_w / np.maximum(cda, 1e-6), np.nan)
-        return np.cbrt(2.0 * ratio / RHO_STANDARD) * 3.6
-
-    vinf_boot = v_inf(boots[:, 0], boots[:, 1])
-    vinf_boot = vinf_boot[np.isfinite(vinf_boot)]
-    return DragFit(
-        power_kw=float(beta[0] / 1000.0),
-        cda_m2=float(beta[1]),
-        delta_cda_low_drag_m2=float(beta[2]) if use_drs else 0.0,
-        power_ci90=(float(np.percentile(boots[:, 0], 5) / 1000), float(np.percentile(boots[:, 0], 95) / 1000)),
-        cda_ci90=(float(np.percentile(boots[:, 1], 5)), float(np.percentile(boots[:, 1], 95))),
-        power_samples=boots[:, 0] / 1000.0,
-        cda_samples=boots[:, 1],
-        v_inf_kmh=float(v_inf(np.array([beta[0]]), np.array([beta[1]]))[0]),
-        v_inf_ci90=(float(np.percentile(vinf_boot, 5)), float(np.percentile(vinf_boot, 95))),
-        v_inf_samples=vinf_boot,
-        n_segments=len(blocks),
-        n_points=len(y_all),
-        residual_sd_ms2=float(np.std(resid) / mass),
-    )

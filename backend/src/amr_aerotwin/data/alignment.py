@@ -71,6 +71,10 @@ def parse_raw_lap(raw_tel: dict[str, Any]) -> RawLap:
         return np.array([default if v in (None, "None") else v for v in vals], dtype=np.float64)
 
     t = col("time")
+    # Throttle 104 is the timing feed's invalid-value marker; it appears almost only under
+    # braking, so it is read as 0% when the brake is on and capped at 100% otherwise.
+    thr = col("throttle")
+    thr = np.where(thr > 100.5, np.where(col("brake") > 0.5, 0.0, 100.0), thr)
     # The archive linearly interpolates GPS onto car-data timestamps. Original fixes are the
     # samples whose decimetre coordinates are whole numbers.
     xyz = np.column_stack([col("x", np.nan), col("y", np.nan), col("z", np.nan)])
@@ -82,7 +86,7 @@ def parse_raw_lap(raw_tel: dict[str, Any]) -> RawLap:
         time_s=t[idx],
         distance_m=col("distance")[idx],
         speed_ms=col("speed")[idx] / 3.6,
-        throttle_pct=col("throttle")[idx],
+        throttle_pct=thr[idx],
         brake=col("brake")[idx],
         gear=col("gear")[idx],
         drs=col("drs")[idx],
@@ -106,13 +110,31 @@ GPS_LAM = 0.2
 MIN_FIXES = 50
 
 
-def estimate_gps_lag_s(raw: RawLap, lap_time_s: float, lam: float = GPS_LAM) -> tuple[float, float]:
-    """Clock offset tau such that a GPS fix stamped t matches the car-data stream at t + tau.
+def longest_frozen_run_m(raw: RawLap, sel: NDArray[np.bool_], s: NDArray[np.float64]) -> float:
+    """Distance covered by the longest run of samples whose speed and rpm both repeat exactly.
 
-    Found by matching speed differentiated from the GPS path against the independent
-    wheel-speed channel. In the public archive tau is ~ +0.14 s: the speed/timing stream
-    trails the GPS stream. Uncorrected, that misplaces samples by ~11 m at 290 km/h, which
-    shows up as large speed errors in braking zones. When speed is nearly constant the
+    Real channels never hold identical values for long (90% of laps stay under ~40 m); a
+    frozen car-data stream does (Baku 2026: 140-180 m of constant speed and rpm)."""
+    v, rpm, ss = raw.speed_ms[sel], raw.rpm[sel], s[sel]
+    same = (np.diff(v) == 0) & (np.diff(rpm) == 0)
+    best, start = 0.0, None
+    for i, flag in enumerate(np.append(same, False)):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            best = max(best, float(ss[i] - ss[start]))
+            start = None
+    return best
+
+
+def estimate_gps_lag_s(raw: RawLap, lap_time_s: float, lam: float = GPS_LAM) -> tuple[float, float]:
+    """Time offset tau such that a GPS fix stamped t matches the car-data stream at t + tau.
+
+    Found by matching speed differentiated from the GPS path against the wheel-speed channel.
+    In the public archive the median is about +0.11 s (lap-to-lap spread ~0.05 s). This cannot
+    tell a clock offset from processing lag in the speed channel; either way, placing car data
+    by GPS position needs the correction, or samples move ~9 m at 300 km/h. (The archive's
+    odometer `distance`, integrated from speed, is unaffected.) When speed is nearly constant the
     offset is not identifiable; if no shift improves on tau = 0 by at least 2%, 0 is
     returned. Returns (tau, RMS speed error m/s).
     """
@@ -300,6 +322,8 @@ def align_lap(
         "finish_line_gap_m": end_gap,
         "speed_time_consistency_pct": float((integral - measured) / measured * 100.0),
         "speed_trap_minus_max_kmh": float(meta.speed_trap_kmh - np.max(v_in) * 3.6),
+        "frozen_run_m": longest_frozen_run_m(raw, inside, s_raw),
+        "throttle_max_pct": float(np.max(raw.throttle_pct[inside])),
     }
 
     return AlignedLap(

@@ -40,6 +40,14 @@ def segment_time_loss(target: AlignedLap, reference: AlignedLap) -> NDArray[np.f
     return cell
 
 
+def reference_cell_time(reference: AlignedLap) -> NDArray[np.float64]:
+    """Time the reference lap spends in each grid cell (s); sums to its lap time."""
+    t = np.append(reference.time_s, reference.meta.lap_time_s)
+    cell = np.diff(t)
+    cell[0] += t[0]
+    return cell
+
+
 def compare_laps(
     target: AlignedLap,
     reference: AlignedLap,
@@ -50,6 +58,7 @@ def compare_laps(
     s = target.distance_m
     length = target.lap_length_m
     cell = segment_time_loss(target, reference)
+    ref_cell = reference_cell_time(reference)
     assigned = np.zeros(len(s), dtype=bool)
     rows = []
     for c_s, label in sorted(zip(corner_distance_m, corner_labels)):
@@ -69,23 +78,31 @@ def compare_laps(
             min_speed_delta_kmh=v_t_min - v_r_min,
             speed_class=corner_speed_class(v_r_min),
         )
+        ref_t = 0.0
         for phase, m in masks.items():
             m = m & ~assigned  # corners closer than 240 m share no cells
             row[f"{phase}_s"] = float(cell[m].sum())
+            ref_t += float(ref_cell[m].sum())
             assigned |= m
         row["total_s"] = row["entry_s"] + row["apex_s"] + row["exit_s"]
+        row["reference_time_s"] = ref_t
         rows.append(row)
     table = pd.DataFrame(rows)
     straight = float(cell[~assigned].sum())
     total = float(cell.sum())
     summary = (
-        table.groupby("speed_class")["total_s"].agg(["sum", "count"]).rename(columns={"sum": "time_s", "count": "n_corners"})
+        table.groupby("speed_class").agg(time_s=("total_s", "sum"), n_corners=("total_s", "size"),
+                                          reference_time_s=("reference_time_s", "sum"))
         .reindex(["low", "medium", "high"]).fillna(0.0).reset_index()
     )
     summary = pd.concat(
-        [summary, pd.DataFrame([{"speed_class": "straights", "time_s": straight, "n_corners": 0}])],
+        [summary, pd.DataFrame([{"speed_class": "straights", "time_s": straight, "n_corners": 0,
+                                 "reference_time_s": float(ref_cell[~assigned].sum())}])],
         ignore_index=True,
     )
+    # Loss as a share of the time the reference spends there: a uniform percentage deficit
+    # gives equal rates everywhere, so rates (not seconds) show where a car is weak.
+    summary["loss_rate_pct"] = 100 * summary["time_s"] / summary["reference_time_s"].replace(0, np.nan)
     return LapComparison(
         distance_m=s,
         delta_s=np.cumsum(cell),

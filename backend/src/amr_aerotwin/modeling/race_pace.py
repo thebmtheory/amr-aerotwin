@@ -12,11 +12,11 @@ Model (ordinary least squares with fixed effects, one race at a time):
 Fuel and tyre age are separable because tyre age resets at every stop while lap number
 does not. Laps are filtered to green-flag running (no pit in/out laps, no lap 1, track
 status '1', within 107% of the driver's median) and gross outliers are trimmed iteratively.
-Uncertainty comes from a wild cluster bootstrap by driver (Cameron, Gelbach and Miller
-2008) with Webb's six-point weights, which behave well with ~20 clusters. Every draw keeps
-the design fixed and repeats the outlier trimming. The tests check interval coverage by
-Monte Carlo with autocorrelated within-stint errors and stint-level offsets. With fewer
-than about 12 drivers (clusters) the intervals become too narrow.
+Uncertainty comes from a delete-one-stint jackknife (Cameron, Gelbach and Miller 2008
+discuss the cluster jackknife): laps within a stint share traffic, tyre and set-up effects,
+and a driver's pace is re-estimated from their other stints in each refit. The tests check
+interval coverage by Monte Carlo for the fuel effect and for team gaps, with autocorrelated
+lap errors and stint-level offsets.
 """
 
 from __future__ import annotations
@@ -95,8 +95,6 @@ def _fit(
 def fit_race_pace(
     laps: pd.DataFrame,
     driver_team: dict[str, str],
-    n_boot: int = 200,
-    seed: int = 1,
     min_laps_per_driver: int = 10,
 ) -> RacePaceResult | None:
     """Fit the race pace model; returns None for races with too little clean slick running."""
@@ -112,27 +110,32 @@ def fit_race_pace(
         return None
     coef, used, resid_sd = _fit(d, ref)
 
-    # Wild cluster bootstrap by driver (Webb six-point weights), trimming repeated in every
-    # draw. Residuals of one driver share a weight, so within-driver correlation (traffic,
-    # tyre state, stint offsets) is preserved.
-    rng = np.random.default_rng(seed)
-    x_used, names_used = _design(used, ref)
-    fitted = x_used @ coef.reindex(names_used).to_numpy()
-    resid = used["time"].to_numpy() - fitted
-    drv_codes, drv_index = np.unique(used["drv"].to_numpy(), return_inverse=True)
-    webb = np.array([-np.sqrt(1.5), -1.0, -np.sqrt(0.5), np.sqrt(0.5), 1.0, np.sqrt(1.5)])
-    boots = []
-    for _ in range(n_boot):
-        w = rng.choice(webb, size=len(drv_codes))[drv_index]
-        b, _, _ = _fit(used.assign(time=fitted + w * resid), ref, trim_iters=2)
-        boots.append(b.reindex(coef.index))
-    bt = pd.DataFrame(boots)
+    # Delete-one-stint jackknife (the cluster jackknife, CR3-like): refit without each stint in
+    # turn. A driver's pace is then re-estimated from their other stints, so stint-level offsets
+    # (traffic, tyre preparation, set-up) enter the uncertainty. Residual-based bootstraps
+    # cannot do this here: the driver fixed effect absorbs part of each stint offset, which
+    # shrinks the residuals. Stints whose removal would leave a driver or compound with no
+    # laps are kept in every refit.
+    stints = used["stint_key"].unique()
+    reps = []
+    for k in stints:
+        sub = used[used["stint_key"] != k]
+        if sub["drv"].nunique() < used["drv"].nunique() or sub["compound"].nunique() < used["compound"].nunique():
+            continue
+        b_k, _, _ = _fit(sub, ref, trim_iters=0)
+        reps.append(b_k.reindex(coef.index))
+    jk = pd.DataFrame(reps)
+    g = len(jk)
+    z90 = 1.6448536
+
+    def jk_sd(values: np.ndarray) -> float:
+        v = np.asarray(values, float)
+        v = v[np.isfinite(v)]
+        return float(np.sqrt((len(v) - 1) / len(v) * np.sum((v - v.mean()) ** 2))) if len(v) > 2 else float("nan")
 
     def ci(name: str) -> tuple[float, float]:
-        col = bt[name].dropna()
-        if len(col) <= 10:
-            return (np.nan, np.nan)
-        return float(col.quantile(0.05)), float(col.quantile(0.95))
+        sd = jk_sd(jk[name].to_numpy()) if g > 2 else float("nan")
+        return float(coef[name] - z90 * sd), float(coef[name] + z90 * sd)
 
     drivers = sorted(used["drv"].unique())
     dp = pd.DataFrame(
@@ -148,15 +151,16 @@ def fit_race_pace(
     # Team pace = faster driver's corrected pace; CI from the bootstrap of that statistic
     teams = sorted(dp["team"].unique())
     team_vals = {t: dp[dp["team"] == t]["pace_s"].min() for t in teams}
-    team_boot = {
-        t: bt[[f"alpha:{x}" for x in dp[dp["team"] == t]["driver"]]].min(axis=1).to_numpy() for t in teams
+    team_jk = {
+        t: jk[[f"alpha:{x}" for x in dp[dp["team"] == t]["driver"]]].min(axis=1).to_numpy() for t in teams
     }
     best = min(team_vals.values())
-    best_boot = np.min(np.vstack(list(team_boot.values())), axis=0)
+    best_jk = np.min(np.vstack(list(team_jk.values())), axis=0)
 
     def gap_ci(t: str) -> tuple[float, float]:
-        diff = team_boot[t] - best_boot
-        return float(np.nanquantile(diff, 0.05)), float(np.nanquantile(diff, 0.95))
+        sd = jk_sd(team_jk[t] - best_jk)
+        gap = team_vals[t] - best
+        return float(gap - z90 * sd), float(gap + z90 * sd)
 
     cis = {t: gap_ci(t) for t in teams}
     tp = pd.DataFrame(

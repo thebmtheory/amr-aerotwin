@@ -56,7 +56,7 @@ def straight_energy_metrics(state: VehicleState, min_length_m: float = 150.0) ->
     rows = []
     step = state.lap.grid_step_m
     n_min = max(1, int(round(MIN_PERSIST_M / step)))
-    for seg in straight_segments(state, min_length_m=min_length_m, trim_m=10.0):
+    for seg in straight_segments(state, min_length_m=min_length_m, trim_m=10.0, drop_line_cut=True):
         v = state.speed_smooth_ms[seg]
         ax = state.ax_propulsive_ms2[seg]
         i_peak = int(np.argmax(v))
@@ -107,7 +107,7 @@ def straight_speed_profile(states: list[VehicleState], ref: VehicleState, min_le
     row per (team, straight, bin) with the team's mean speed there (km/h).
     """
     rows = []
-    for k, seg in enumerate(straight_segments(ref, min_length_m=min_length_m, trim_m=0.0)):
+    for k, seg in enumerate(straight_segments(ref, min_length_m=min_length_m, trim_m=0.0, drop_line_cut=True)):
         edges = np.linspace(0, len(seg), PROFILE_BINS + 1).astype(int)
         step = ref.lap.grid_step_m
         for st in states:
@@ -142,7 +142,6 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     if d.empty:
         return d
     per_event = d.groupby(["round", "bin"])["gap_kmh"].mean().unstack("bin")
-    field_v = d.groupby(["round", "bin"])["field_kmh"].mean().unstack("bin").to_numpy()
     rng = np.random.default_rng(seed)
     arr = per_event.to_numpy()
     idx = rng.integers(0, len(arr), size=(n_boot, len(arr)))
@@ -151,10 +150,9 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     half = PROFILE_BINS // 2
     first = boots[:, half - 1] - boots[:, 0]
     second = boots[:, -1] - boots[:, half]
-    # A pure drag excess changes dv/ds in proportion to v, so the second half (faster) should
-    # lose more than the first in the ratio of mean speeds; much more points to something else.
-    v_first = np.nanmean(field_v[:, :half])
-    v_second = np.nanmean(field_v[:, half:])
+    # Note: the shape alone cannot separate causes. A point-mass simulation shows that a
+    # corner-exit deficit plus extra drag also gives a flat first half and a late loss, so the
+    # profile locates the loss along the straight but does not attribute it.
     out = pd.DataFrame({
         "bin": per_event.columns.astype(int),
         "fraction": (per_event.columns.astype(float) + 0.5) / PROFILE_BINS,
@@ -168,8 +166,11 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     out.attrs["first_half_ci90"] = (float(np.nanpercentile(first, 5)), float(np.nanpercentile(first, 95)))
     out.attrs["second_half_kmh"] = float(np.nanmean(arr[:, -1] - arr[:, half]))
     out.attrs["second_half_ci90"] = (float(np.nanpercentile(second, 5)), float(np.nanpercentile(second, 95)))
-    out.attrs["drag_only_ratio"] = float(v_second / v_first) if v_first > 0 else float("nan")
     out.attrs["n_events"] = int(len(arr))
+    per_straight = d.pivot_table(index=["round", "straight"], columns="bin", values="gap_kmh")
+    late = (per_straight.iloc[:, -1] - per_straight.iloc[:, half]).dropna()
+    out.attrs["n_straights"] = int(len(late))
+    out.attrs["n_straights_losing_late"] = int((late < 0).sum())
     if d["bin_length_m"].notna().all():
         # Time cost per lap (all main straights) of the whole straight-line gap, and of the part
         # that builds up along the straight (gap beyond the corner-exit gap of that straight)

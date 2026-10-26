@@ -32,7 +32,7 @@ from amr_aerotwin.modeling.calibration import (
 from amr_aerotwin.modeling.energy import lap_energy_summary, straight_energy_metrics, straight_speed_profile
 from amr_aerotwin.modeling.lap_compare import compare_laps
 from amr_aerotwin.modeling.pod import PODReducedOrderModel
-from amr_aerotwin.modeling.powertrain import event_power_drag_rows
+from amr_aerotwin.modeling.powertrain import event_power_drag_rows, wind_rotation_test
 from amr_aerotwin.modeling.race_pace import fit_race_pace
 from amr_aerotwin.modeling.validation import check_lap, expected_turn_count, geometry_ok
 from amr_aerotwin.physics.dynamics import (
@@ -67,6 +67,8 @@ class EventOutput:
     race_rows: pd.DataFrame
     accel_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
     profile_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
+    timing_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
+    section_rows: pd.DataFrame = field(default_factory=pd.DataFrame)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -153,23 +155,25 @@ def _export_trace(arr: np.ndarray, nd: int = 2) -> list:
     return _r(np.asarray(arr)[::EXPORT_STEP], nd)
 
 
-def _straight_speed_deltas(states: dict[str, VehicleState], ref_state: VehicleState) -> tuple[dict[str, float], float]:
-    """Each car's peak speed on the main straights vs the field median (km/h, averaged).
+def straight_windows(ref_state: VehicleState) -> list[tuple[int, int]]:
+    """Index windows (start, end inclusive) of the main straights on the reference lap, extended
+    20 points past the end so a car that brakes later is still covered."""
+    n = len(ref_state.distance_m)
+    return [(int(seg[0]), int(min(seg[-1] + 20, n - 1))) for seg in straight_segments(ref_state, min_length_m=350.0, trim_m=0.0)]
 
-    Also returns the field-median peak speed (km/h) averaged over the straights.
-    """
-    segs = straight_segments(ref_state, min_length_m=350.0, trim_m=0.0)
-    if not segs:
+
+def _straight_speed_deltas(states: dict[str, VehicleState], windows: list[tuple[int, int]]) -> tuple[dict[str, float], float]:
+    """Each car's peak speed on the main straights vs the median of the *other teams'* cars
+    (km/h, averaged over straights). Also returns the all-car median peak speed."""
+    if not windows:
         return {}, float("nan")
-    peaks = {}
-    for d, st in states.items():
-        vals = []
-        for seg in segs:
-            lo, hi = seg[0], min(seg[-1] + 20, len(st.speed_smooth_ms) - 1)  # include braking point
-            vals.append(float(np.max(st.speed_smooth_ms[lo:hi + 1]) * 3.6))
-        peaks[d] = np.array(vals)
-    med = np.median(np.vstack(list(peaks.values())), axis=0)
-    return {d: float(np.mean(v - med)) for d, v in peaks.items()}, float(np.mean(med))
+    peaks = {d: np.array([float(np.max(st.speed_smooth_ms[lo:hi + 1]) * 3.6) for lo, hi in windows]) for d, st in states.items()}
+    team = {d: st.lap.meta.team for d, st in states.items()}
+    out = {}
+    for d, v in peaks.items():
+        others = [peaks[o] for o in peaks if team[o] != team[d]]
+        out[d] = float(np.mean(v - np.median(np.vstack(others), axis=0))) if others else float("nan")
+    return out, float(np.mean(np.median(np.vstack(list(peaks.values())), axis=0)))
 
 
 def _calibrate(state: VehicleState, kappa: np.ndarray, use_low_drag: bool, mh: bool) -> dict[str, Any]:
@@ -222,6 +226,16 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     laps, ref, session_laps, w = _load_quali_laps(repo, year, event)
     warns += w
 
+    # Timing-only table: every driver's fastest valid lap, whether or not its telemetry is
+    # usable. Season pace analyses use this so a failed telemetry check never drops a lap time.
+    trows = []
+    for drv in session_laps["drv"].dropna().unique():
+        r = fastest_valid_lap(session_laps, drv)
+        if r is not None:
+            trows.append({"season": year, "round": round_no, "event": event, "driver": drv,
+                          "team": str(r["team"]), "lap_time_s": float(r["time"])})
+    timing_rows = pd.DataFrame(trows)
+
     checks = {d: check_lap(lp) for d, lp in laps.items()}
     good = {d: lp for d, lp in laps.items() if checks[d].passed}
     for d, c in checks.items():
@@ -244,7 +258,10 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     pole_drv = min(good, key=lambda d: good[d].meta.lap_time_s)
     pole = good[pole_drv]
     pole_state = states[pole_drv]
-    fastest = min(lp.meta.lap_time_s for lp in laps.values())
+    # Gaps are measured against the official fastest lap (timing), even when that lap's
+    # telemetry is unusable; telemetry comparisons use `pole_drv`, the fastest clean lap.
+    fastest = float(timing_rows["lap_time_s"].min()) if not timing_rows.empty else min(lp.meta.lap_time_s for lp in laps.values())
+    official = timing_rows.loc[timing_rows["lap_time_s"].idxmin()] if not timing_rows.empty else None
 
     # Corners on the reference line
     corners = repo.corners(year, event)
@@ -271,12 +288,14 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             g = fit_grip_vs_q(all_pts[all_pts["team"] == team], q_low, q_high, n_boot=200)
             if g is not None:
                 grip[team] = g
-    straight_delta, straight_peak_kmh = _straight_speed_deltas(states, pole_state)
+    windows = straight_windows(pole_state)
+    straight_delta, straight_peak_kmh = _straight_speed_deltas(states, windows)
 
     # ------------------------------------------------------------------ energy + acceleration bands
     energy = {d: lap_energy_summary(st) for d, st in states.items()}
     accel_rows = event_power_drag_rows(states, pole_state)
     accel_rows["season"], accel_rows["round"], accel_rows["event"] = year, round_no, event
+    wind_test = wind_rotation_test(states, pole_state)
     profile_rows = straight_speed_profile(list(states.values()), pole_state)
     if not profile_rows.empty:
         profile_rows["season"], profile_rows["round"], profile_rows["event"] = year, round_no, event
@@ -365,7 +384,10 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         "circuit": info, "lap_length_m": _r(length, 1), "gps_smoothing_lam": lam,
         "gps_smoothing_scores": {str(k): _r(v, 3) for k, v in lam_scores.items()},
         "turning_number": _r(tn, 4), "expected_turns": n_turns, "geometry_ok": geo_ok, "distance_scale": _r(ref.scale, 4),
-        "pole": {"driver": pole_drv, "team": pole.meta.team, "lap_time_s": pole.meta.lap_time_s},
+        "pole": {"driver": pole_drv, "team": pole.meta.team, "lap_time_s": pole.meta.lap_time_s,
+                 "is_official_pole": bool(official is None or official["driver"] == pole_drv)},
+        "official_pole": None if official is None else {"driver": str(official["driver"]), "team": str(official["team"]),
+                                                        "lap_time_s": float(official["lap_time_s"])},
         "track": {"high_speed_share": _r(high_share), "full_throttle_share": _r(full_throttle),
                   "straight_share": _r(straight_share), "q_low_pa": _r(q_low, 0), "q_high_pa": _r(q_high, 0),
                   "straight_peak_kmh": _r(straight_peak_kmh, 1)},
@@ -395,6 +417,18 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             "total_delta_s": _r(cmp_.total_delta_s, 3),
         }
 
+    # ------------------------------------------------------------------ every team's best lap vs pole, by section
+    srows = []
+    for team in sorted(set(team_of.values())):
+        drv_best = min((d for d in good if team_of[d] == team), key=lambda d: good[d].meta.lap_time_s)
+        if drv_best == pole_drv:
+            continue
+        cs = compare_laps(good[drv_best], pole, c_s, c_lab).class_summary
+        for r in cs.to_dict("records"):
+            srows.append({"season": year, "round": round_no, "event": event, "team": team, "driver": drv_best,
+                          "section": r["speed_class"], "loss_s": r["time_s"], "reference_time_s": r["reference_time_s"]})
+    section_rows = pd.DataFrame(srows)
+
     # ------------------------------------------------------------------ lap sim calibration + sensitivities
     sims = {}
     if geo_ok:
@@ -417,6 +451,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             "car": key, "distance_m": _r(pole.distance_m, 1), "curvature": _r(kappa, 6),
             "low_drag_mask": _r(mask.astype(int), 0) if mask is not None else None,
             "lap_length_m": _r(length, 2), "observed_lap_time_s": good[key].meta.lap_time_s,
+            "straight_windows": [list(w) for w in windows],
             "params": {k: getattr(p_obj, k) for k in ("mass_kg", "cla_m2", "cda_m2", "mu", "power_w",
                                                      "rho_kg_m3", "crr", "low_drag_cda_m2", "long_grip_scale")},
         }
@@ -469,6 +504,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     except Exception as err:  # noqa: BLE001
         warns.append(f"race pace failed: {err}")
 
+    summary["wind_rotation_test"] = _r(wind_test, 4) if wind_test else None
     summary["warnings"] = warns
     summary["driver_table"] = _r(driver_rows.drop(columns=[c for c in driver_rows if c.startswith("q_")]).to_dict("records"), 4)
     summary["team_table"] = _r(team_rows.to_dict("records"), 4)
@@ -476,7 +512,8 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         d: {"passed": c.passed, "failures": _r(c.failures, 2),
             "metrics": _r({k: laps[d].quality[k] for k in laps[d].quality}, 3)} for d, c in checks.items()
     }
-    return EventOutput(summary, driver_rows, team_rows, corner_rows, race_rows, accel_rows, profile_rows, warns)
+    return EventOutput(summary, driver_rows, team_rows, corner_rows, race_rows, accel_rows, profile_rows, timing_rows,
+                       section_rows, warns)
 
 
 def safe_process_event(repo: TelemetryRepository, year: int, event: str, round_no: int, run_mcmc: bool = True) -> EventOutput | str:

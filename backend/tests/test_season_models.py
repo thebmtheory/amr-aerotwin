@@ -10,7 +10,6 @@ from amr_aerotwin.modeling.corner_model import (
     fit_physics,
     physics_speed_kmh,
     team_corner_deficit,
-    wind_sensitivity,
 )
 from amr_aerotwin.modeling.season import (
     bayesian_changepoint,
@@ -134,15 +133,6 @@ def test_cross_validation_is_grouped_by_event_and_conformal_is_calibrated():
     assert deficit["Aston Martin"] == pytest.approx(-2.0 * 5 / 6, abs=0.8)
 
 
-def test_wind_sensitivity_estimates_known_headwind_effect():
-    df, _ = _corner_data(n_events=20)
-    df["v_min_kmh"] += 0.8 * df["headwind_ms"]
-    ws = wind_sensitivity(df, n_boot=60)
-    for _, r in ws.iterrows():
-        assert r["kmh_per_ms_headwind"] == pytest.approx(0.8, abs=0.15)
-        assert r["ci_lo"] < r["kmh_per_ms_headwind"] < r["ci_hi"]
-
-
 def test_exact_shapley_linear_model_and_efficiency():
     rng = np.random.default_rng(5)
     x = rng.normal(size=(20, 4))
@@ -176,3 +166,16 @@ def test_grip_matched_params_hit_both_reference_points():
     assert grip(new, 3500.0) / grip(base, 3500.0) == pytest.approx(0.90, rel=1e-9)
     same, _ = grip_matched_params(base, 1.0, 1.0, 800.0, 3500.0)
     assert same.mu == pytest.approx(base.mu) and same.cla_m2 == pytest.approx(base.cla_m2)
+
+
+def test_effective_drag_is_recovered_from_a_top_speed_gap():
+    from amr_aerotwin.physics.lapsim import VehicleParams, simulate_lap
+    from amr_aerotwin.pipeline.season import _straight_peaks_kmh, _with_drag, match_drag_to_top_speed
+    from conftest import stadium_track
+
+    s, k, *_, length = stadium_track(straight_m=900.0, radius_m=60.0)
+    base = VehicleParams(800, 4.5, 1.3, 1.8, 600e3, 1.2)
+    v0 = _straight_peaks_kmh(simulate_lap(s, k, base, None, length).speed_ms, k, 5.0)
+    v1 = _straight_peaks_kmh(simulate_lap(s, k, _with_drag(base, 0.25), None, length).speed_ms, k, 5.0)
+    assert v1 < v0
+    assert match_drag_to_top_speed(base, s, k, None, length, v1 - v0) == pytest.approx(0.25, abs=0.01)

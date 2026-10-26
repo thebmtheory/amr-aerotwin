@@ -72,47 +72,61 @@
     return i < 0 ? {} : { mean: g.mean_s[i], lo: g.ci_lo[i], hi: g.ci_hi[i], total: g.mean_total_s, n: g.n_events };
   }
 
+  var RATES = S.section_rates || {};
+  function rate(season, team) { return (RATES[season] || {})[team] || {}; }
+  function secRate(r, name) { var i = (r.sections || []).indexOf(name); return i < 0 ? {} : { v: r.rate_pct[i], lo: r.ci_lo[i], hi: r.ci_hi[i] }; }
+  function others(season, offPace) {
+    var o = RATES[season] || {};
+    // offPace: teams at least 1% off pole over a lap; nearer the front the corner deficit is too
+    // small for a stable straights-to-corners ratio
+    return Object.keys(o).filter(function (k) { return k !== TARGET && o[k].n_events >= 5 && (!offPace || o[k].lap_rate_pct >= 1); }).map(function (k) { return { team: k, r: o[k] }; });
+  }
+
   function heroText() {
     fill("n_events", String(S.n_events));
-    var low26 = cls("2026", "low"), low25 = cls("2025", "low"), str26 = cls("2026", "straights");
-    var b0 = (SP26.bins || [])[0] || {};
+    var a26 = rate("2026", TARGET), a25 = rate("2025", TARGET), st26 = secRate(a26, "straights");
+    var stOthers = others("2026").map(function (x) { return secRate(x.r, "straights").v; });
+    var ratioOthers = others("2026", true).map(function (x) { return x.r.straight_to_corner_ratio; });
+    var cad = rate("2026", "Cadillac"), cadSt = secRate(cad, "straights");
+    var vf = (S.straight_vs_field || {})["2026"] || {};
     fill("hero_lede",
-      "Slow corners are where Aston Martin loses the most time in both seasons: " + f(low25.mean, 2) + " s of a " + f(low25.total, 2) + " s qualifying gap to pole in 2025 and " +
-      f(low26.mean, 2) + " s of " + f(low26.total, 2) + " s in 2026. The pattern holds across two different cars built to different rules, with the same two drivers, so it is something that persists: set-up philosophy, mechanical grip and traction, or driving style (public data cannot separate them). In 2026 it carries onto the straights: the car starts them " +
-      f(-b0.gap_kmh, 1) + " km/h down on the rest of the field, and then loses about " + f(-SP26.second_half_kmh, 1) + " km/h more in the second half of each straight, where 2026 cars run out of deployable energy.");
+      "Measured as a share of the time spent in each part of the lap, every team more than 1% off pole loses most of its deficit in the corners and less on the straights. Aston Martin did too in 2025. In 2026 it loses " +
+      f(st26.v, 1) + "% of its straight-line time (90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "%), close to its " + f(a26.corner_rate_pct, 1) + "% in the corners. Every other team's straight-line rate is between " +
+      f(Math.min.apply(null, stOthers), 1) + "% and " + f(Math.max.apply(null, stOthers), 1) + "%. Cadillac, almost exactly as slow over a lap (" + f(cad.lap_rate_pct, 2) + "% vs " + f(a26.lap_rate_pct, 2) +
+      "%), loses " + f(cadSt.v, 1) + "% on the straights. Along each main straight, Aston Martin's speed gap grows by about " + f(-SP26.second_half_kmh, 1) + " km/h in the second half, at full throttle.");
     var tiles = [
-      { k: "Lost in slow corners, 2026", v: f(low26.mean, 2) + " s", ci: "90% CI " + f(low26.lo, 2) + "–" + f(low26.hi, 2) + " s of a " + f(low26.total, 2) + " s gap · " + low26.n + " events", amr: true },
-      { k: "Speed down at corner exit", v: f(b0.gap_kmh, 1) + " km/h", ci: "start of the main straights, 2026 · 90% CI " + ci([b0.ci_lo, b0.ci_hi], 1) },
-      { k: "Lost late on each straight", v: f(SP26.second_half_kmh, 1) + " km/h", ci: "second half, CI " + ci(SP26.second_half_ci90, 1) + " · first half " + f(SP26.first_half_kmh, 1) },
-      { k: "Same test, 2025 car", v: (SP25.growth_kmh > 0 ? "+" : "") + f(SP25.growth_kmh, 1) + " km/h", ci: "growth along the straight, CI " + ci(SP25.growth_ci90, 1) + " · no late loss" },
+      { k: "Straight-line loss rate, 2026", v: f(st26.v, 1) + "%", ci: "90% CI " + f(st26.lo, 1) + "–" + f(st26.hi, 1) + "% · " + f(vf.ratio, 1) + "× the next team (" + esc(vf.next_team || "–") + "), CI " + ci(vf.ratio_ci90, 1), amr: true },
+      { k: "Straights vs corners, 2026", v: f(a26.straight_to_corner_ratio, 2), ci: "ratio of loss rates, CI " + ci(a26.straight_to_corner_ci90, 2) + " · teams over 1% off pole " + f(Math.min.apply(null, ratioOthers), 2) + "–" + f(Math.max.apply(null, ratioOthers), 2) },
+      { k: "Same ratio, 2025 car", v: f(a25.straight_to_corner_ratio, 2), ci: "CI " + ci(a25.straight_to_corner_ci90, 2) + " · in line with the field" },
+      { k: "Lost late on the straights", v: f(SP26.second_half_kmh, 1) + " km/h", ci: "second half, full throttle, CI " + ci(SP26.second_half_ci90, 1) + " · " + SP26.n_straights + " straights, " + SP26.n_events + " events" },
     ];
     $("tiles").innerHTML = tiles.map(function (t) {
       return '<div class="tile"><span class="k">' + t.k + '</span><span class="v' + (t.amr ? " amr" : "") + '">' + t.v + '</span><span class="ci">' + t.ci + "</span></div>";
     }).join("");
-    fill("hero_note", "Every comparison is with the median of the other teams at the same event and the same piece of track, so gradient, wind and track evolution cancel. Intervals are 90% bootstrap intervals over events. Active-aero and ERS state are not published in 2026, so energy deployment is inferred from speed alone.");
+    fill("hero_note", "Loss rate = time lost to the pole lap in a section ÷ time the pole lap spends there, summed over events. A car that is uniformly slower has equal rates everywhere, so rates (not seconds) show where a car is weak; in seconds, slow corners always dominate because cars spend the most time there. Comparisons use the same piece of track, so geometry and gradient cancel, but laps can be set at different times of the session: track evolution mostly adds grip, which inflates corner rates more than straight-line ones. Intervals are 90% bootstrap intervals over events.");
 
-    var ratio = SP26.second_half_kmh / SP26.first_half_kmh;
-    fill("finding_text", "Splitting each main straight into ten equal pieces and comparing speeds piece by piece shows two separate losses. The first is already present at corner exit and barely changes through the first half (" +
-      f(SP26.first_half_kmh, 1) + " km/h, CI " + ci(SP26.first_half_ci90, 1) + "). The second appears late: " + f(SP26.second_half_kmh, 1) + " km/h in the second half (CI " + ci(SP26.second_half_ci90, 1) +
-      "), " + f(ratio, 1) + " times the first-half change. Extra drag would spread the loss almost evenly (its effect on dv/ds grows with speed, a ratio of about " + f(SP26.drag_only_ratio, 2) +
-      " here), and a power deficit would bite earlier, not later. A loss that appears when the straight is half done fits deployment ending earlier than on rival cars. Aston Martin's speed drop after peak is also " +
-      sgn((REL26.clip_speed_drop_kmh || {}).mean, 1) + " km/h larger than the field's (CI " + ci([(REL26.clip_speed_drop_kmh || {}).lo, (REL26.clip_speed_drop_kmh || {}).hi], 1) + ").");
-    fill("joint_text", "I also tried to fit power and drag directly from acceleration on the first, energy-rich part of each straight, with gravity removed using the GPS altitude. Over a single straight the two terms are almost perfectly collinear (correlation " +
-      f(PT26.correlation, 2) + " for Aston Martin), and the 90% intervals span " + ci(PT26.d_power_ci90, 0, " kW") + " and " + ci(PT26.d_cda_ci90, 2, " m²") +
-      ". Public timing data cannot say how much of the car's straight-line deficit is engine output and how much is drag, so this page does not claim either. The position-matched acceleration deficit on that part of the straight is " +
-      sgn(PT26.matched_kw, 0) + " kW-equivalent (CI " + ci(PT26.matched_ci90, 0) + "), indistinguishable from zero.");
+    fill("finding_text", "Splitting each main straight into ten equal pieces and comparing speeds piece by piece shows where the straight-line time goes. Aston Martin starts the straights " + f(-((SP26.bins || [])[0] || {}).gap_kmh, 1) +
+      " km/h down, holds that through the first half (" + f(SP26.first_half_kmh, 1) + " km/h, CI " + ci(SP26.first_half_ci90, 1) + ") and loses " + f(-SP26.second_half_kmh, 1) + " km/h more in the second half (CI " + ci(SP26.second_half_ci90, 1) +
+      "), at full throttle: its drivers are not lifting early. The loss appears on " + SP26.n_straights_losing_late + " of " + SP26.n_straights + " main straights that start and end away from the timing line (" + SP26.n_events +
+      " events), and leaving out any single event keeps it below zero. Holding the gap while starting slower already means weaker acceleration than the field. The shape does not identify the cause: a point-mass simulation reproduces it with extra drag alone, and energy deployment ending earlier or harvesting at full throttle fit as well. The 2025 car shows no growth (" +
+      sgn(SP25.growth_kmh, 1) + " km/h, CI " + ci(SP25.growth_ci90, 1) + ").");
+    var pt25 = ((S.powertrain || {})["2025"] || {})[TARGET] || {};
+    fill("joint_text", "Fitting power and drag directly from acceleration on the first part of each straight, with gravity removed using the GPS altitude, does not separate them. The two terms are collinear over a single straight, so a fit needs at least 200 m of clean straight and a 60 km/h speed range; " +
+      (PT26.n_events ? "Aston Martin passes that at " + PT26.n_events + " events in 2026, and the intervals still span " + ci(PT26.d_power_ci90, 0, " kW") + " and " + ci(PT26.d_cda_ci90, 2, " m²") + "."
+        : "in 2026 Aston Martin's laps pass that at fewer than four events, so no fit is reported. In 2025 (" + (pt25.n_events || 0) + " events) the fitted power and drag move together (correlation " + f(pt25.correlation, 2) + ").") +
+      " An earlier version of this page claimed a 36 kW power deficit; it came from not correcting for gradient and comparing cars on different stretches of track, and is withdrawn.");
     var st = (SP26.time_build_ci90 || []);
-    fill("decomp_text", "Lap-time cost on the main straights in 2026: " + f(SP26.time_total_s, 2) + " s per lap (CI " + ci(SP26.time_total_ci90, 2) + "), of which " + f(SP26.time_build_s, 2) +
-      " s (CI " + ci(st, 2) + ") comes from the speed lost along the straight rather than carried from the corner. The rest of the " + f(str26.total, 1) + " s gap is in the corners, led by slow ones.");
+    fill("decomp_text", "On the main straights alone this costs " + f(SP26.time_total_s, 2) + " s per lap (CI " + ci(SP26.time_total_ci90, 2) + "), of which " + f(SP26.time_build_s, 2) +
+      " s (CI " + ci(st, 2) + ") is the speed lost along the straight rather than carried from the corner.");
 
     if (UPG) {
       var gh = UPG.grip_high_rel;
-      fill("upgrade_text", "Aston Martin declared a " + (declaredParts(UPG.event, 2026) || "major") + " upgrade at the " + esc(short(UPG.event)) +
-        ". The pace data is suggestive, not conclusive. A changepoint model that is not told upgrade dates finds " + esc(short(CP26.map_event || "–")) +
-        " the most likely place for a shift (posterior " + f(CP26.map_probability, 2) + "), but a season with no change at all is about as plausible (" + f(CP26.p_no_change, 2) +
-        ", between " + f(minVal(CP26.p_no_change_by_prior_g), 2) + " and " + f(maxVal(CP26.p_no_change_by_prior_g), 2) + " across reasonable priors). Fast-corner grip relative to the other teams went from " +
-        f(gh.before.mean * 100, 1) + "% to " + f(gh.after.mean * 100, 1) + "% (shift " + sgn(gh.shift * 100, 1) + " ± " + f(gh.shift_se * 100, 1) + " points), but only " + gh.after.n +
-        " post-upgrade events have clean geometry, so that is not yet distinguishable from track mix.");
+      fill("upgrade_text", "Aston Martin declared a " + (declaredParts(UPG.event, 2026) || "major") + " upgrade at the " + esc(UPG.event) +
+        ". A changepoint model that is not told upgrade dates finds the " + esc(CP26.map_event || "–") + " the most likely place for a shift in its qualifying pace (posterior " + f(CP26.map_probability, 2) +
+        ", against " + f(CP26.p_no_change, 2) + " for no change, " + f(minVal(CP26.p_no_change_by_prior_g), 2) + "–" + f(maxVal(CP26.p_no_change_by_prior_g), 2) + " across priors), with a step of " +
+        sgn(CP26.effect_pct, 2) + "% of lap time (CI " + ci(CP26.effect_ci90_pct, 2) + "). Fast-corner grip relative to the other teams went from " + f(gh.before.mean * 100, 1) + "% to " + f(gh.after.mean * 100, 1) +
+        "% (" + sgn(gh.shift * 100, 1) + " ± " + f(gh.shift_se * 100, 1) + " points, " + gh.before.n + " events before and only " + gh.after.n + " after with clean geometry). The difference-in-differences test below cannot settle it either: with ten rival teams as placebos its smallest possible p-value is " +
+        f(((S.upgrades || {}).effects || []).reduce(function (m, e) { return Math.min(m, e.p_floor || 1); }, 1), 2) + ", which no longer clears a correction for testing five upgrades. Suggestive, not established.");
     }
   }
   function declaredParts(event, season) {
@@ -167,27 +181,30 @@
         shapes: [{ type: "line", yref: "paper", y0: 0, y1: 1, x0: 0, x1: 0, line: { color: t.muted, width: 1 } }] }));
   }
 
-  function renderGapClass(t) {
+  function renderRates(t) {
     t = t || theme();
-    var order = ["low", "medium", "high", "straights"], names = { low: "slow corners", medium: "medium corners", high: "fast corners", straights: "straights" };
-    var cols = { low: t.amr, medium: t.ref, high: t.third, straights: t.field };
-    var traces = order.map(function (c) {
-      return ["2025", "2026"].map(function (season) {
-        var v = cls(season, c);
-        return { season: season, v: v };
-      });
+    var season = current.rateSeason || "2026", o = RATES[season] || {};
+    var teams = Object.keys(o).filter(function (k) { return o[k].n_events >= 5; });
+    var xs = teams.map(function (k) { return o[k].corner_rate_pct; }), ys = teams.map(function (k) { return secRate(o[k], "straights").v; });
+    var lim = Math.max.apply(null, xs.concat(ys).filter(isFinite)) * 1.15;
+    var guide = [0.25, 0.5, 1].map(function (r) {
+      return { x: [0, lim], y: [0, lim * r], type: "scatter", mode: "lines", line: { color: t.rule, width: 1, dash: r === 1 ? "solid" : "dot" }, hoverinfo: "skip", showlegend: false };
     });
-    plot("ch-gapclass", order.map(function (c, i) {
-      var r = traces[i];
-      return { x: r.map(function (q) { return q.season; }), y: r.map(function (q) { return q.v.mean; }), name: names[c], type: "bar", marker: { color: cols[c] },
-        error_y: { type: "data", symmetric: false, array: r.map(function (q) { return q.v.hi - q.v.mean; }), arrayminus: r.map(function (q) { return q.v.mean - q.v.lo; }), color: t.ink2, thickness: 1, width: 4 },
-        hovertemplate: names[c] + " %{x}: %{y:.2f} s<extra></extra>" };
-    }), layout(t, { barmode: "group", bargap: 0.3, showlegend: true, yaxis: { title: { text: "seconds lost to pole per lap (mean over events)" } }, xaxis: { type: "category" } }));
+    var notes = [0.25, 0.5, 1].map(function (r) { return { x: lim, y: lim * r, xanchor: "right", yanchor: "bottom", text: r === 1 ? "straights = corners" : "× " + r, showarrow: false, font: { size: 10, color: t.muted } }; });
+    plot("ch-rates", guide.concat([{
+      x: xs, y: ys, text: teams.map(function (k) { return k === TARGET || o[k].lap_rate_pct > 2.5 ? k : ""; }), hovertext: teams,
+      type: "scatter", mode: "markers+text", textposition: "top left", textfont: { size: 11, color: t.ink2 },
+      marker: { size: teams.map(function (k) { return k === TARGET ? 13 : 9; }), color: teams.map(function (k) { return k === TARGET ? t.amr : t.field; }), line: { color: t.surface, width: 2 } },
+      error_y: { type: "data", symmetric: false, array: teams.map(function (k) { var r = secRate(o[k], "straights"); return r.hi - r.v; }), arrayminus: teams.map(function (k) { var r = secRate(o[k], "straights"); return r.v - r.lo; }), color: t.rule, thickness: 1, width: 0 },
+      customdata: teams.map(function (k) { return [o[k].lap_rate_pct, o[k].straight_to_corner_ratio, o[k].n_events]; }),
+      hovertemplate: "%{hovertext}<br>corners %{x:.2f}% · straights %{y:.2f}%<br>lap %{customdata[0]:.2f}% · ratio %{customdata[1]:.2f} · %{customdata[2]} events<extra></extra>",
+    }]), layout(t, { xaxis: { title: { text: "loss rate in corners, % of pole's time there" }, range: [0, lim] },
+      yaxis: { title: { text: "loss rate on straights, %" }, range: [-0.6, lim] }, annotations: notes }));
   }
 
   function renderJoint(t) {
     t = t || theme();
-    var series = [["2026", t.amr, "Aston Martin 2026"], ["2025", t.third, "Aston Martin 2025"]];
+    var series = [["2026", t.amr, "Aston Martin 2026"], ["2025", t.third, "Aston Martin 2025"]].filter(function (r) { return ((((S.powertrain || {})[r[0]] || {})[TARGET]) || {}).draws; });
     plot("ch-joint", series.map(function (r) {
       var d = ((((S.powertrain || {})[r[0]] || {})[TARGET]) || {}).draws || [];
       return { x: d.map(function (q) { return q[0]; }), y: d.map(function (q) { return q[1]; }), name: r[2], type: "scatter", mode: "markers",
@@ -482,16 +499,10 @@
     var amr = en.filter(function (r) { return r.team === TARGET; })[0] || {};
     var fieldLoss = mean(en.map(function (r) { return r.clip_time_loss_s; }));
     var loss25 = mean(en25.map(function (r) { return r.clip_time_loss_s; }));
-    var rc = (REL26.clip_speed_drop_kmh || {}), rt = (REL26.clip_time_loss_s || {});
-    fill("energy_text", "In 2026 cars reach peak speed part-way along a straight and then slow down at full throttle. Speed-dependent power alone, including the regulated MGU-K taper, cannot do that; it means power is falling with time as deployment ends. Acceleration here has gravity removed using GPS altitude, and only decelerations lasting at least 30 m count. The field loses on average " +
-      f(fieldLoss, 3) + " s per lap against holding peak speed, against " + f(loss25, 3) + " s in 2025. Aston Martin’s speed drop after peak is " + sgn(rc.mean, 1) + " km/h larger than the other teams’ (CI " + f(rc.lo, 1) + " to " + f(rc.hi, 1) +
-      ")" + dropRank() + "; the corresponding time loss (" + sgn(rt.mean, 3) + " s, CI " + f(rt.lo, 3) + " to " + f(rt.hi, 3) + ") is not distinguishable from the field.");
-  }
-
-  function dropRank() {
-    var en = (S.energy || []).filter(function (r) { return r.season === 2026; }).sort(function (a, b) { return b.clip_speed_drop_kmh - a.clip_speed_drop_kmh; });
-    var i = en.map(function (r) { return r.team; }).indexOf(TARGET);
-    return i === 0 ? ", the largest of any team" : i > 0 ? ", " + (i + 1) + (i === 1 ? "nd" : i === 2 ? "rd" : "th") + " largest of " + en.length + " teams" : "";
+    var rt = (REL26.clip_time_loss_s || {});
+    fill("energy_text", "In 2026 cars reach peak speed part-way along a straight and then slow down at full throttle. Speed-dependent power alone, including the regulated MGU-K taper, cannot do that; it means power falls with time as deployment ends or the car harvests. Acceleration here has gravity removed using GPS altitude, and only decelerations lasting at least 30 m count. The field loses on average " +
+      f(fieldLoss, 3) + " s per lap against holding peak speed, against " + f(loss25, 3) + " s in 2025. Aston Martin's loss on this measure (" + sgn(rt.mean, 3) + " s vs the other teams, CI " + f(rt.lo, 3) + " to " + f(rt.hi, 3) +
+      ") is not distinguishable from the field, so this narrow measure of clipping does not by itself explain its straight-line deficit.");
   }
 
   // ------------------------------------------------------------------ race pace
@@ -518,15 +529,16 @@
   function renderModels(t) {
     t = t || theme();
     var cm = S.corner_model || {};
-    var names = { steady: "Steady-state cornering formula", physics: "Lap sim on track geometry (no fitting)", ml: "Gradient boosting only", hybrid: "Hybrid: lap sim + boosted residual" };
+    var names = { steady: "Steady-state formula (aero term not identified: v = √(aR))", physics: "Lap sim on track geometry, nominal car from training events", ml: "Gradient boosting only", hybrid: "Hybrid: lap sim + boosted residual" };
     $("tbl-cm").innerHTML = "<caption>Out of sample by whole circuit (" + cm.n_circuits + " circuits, " + cm.n_events + " events, " + cm.n_rows + " corners)</caption>" +
       '<thead><tr><th>Model</th><th class="num">RMSE</th><th class="num">R²</th><th class="num">Within-corner R²</th></tr></thead><tbody>' +
-      (cm.metrics || []).map(function (r) { return "<tr><td>" + names[r.model] + '</td><td class="num">' + f(r.rmse_kmh, 1) + ' km/h</td><td class="num">' + f(r.r2, 3) + '</td><td class="num">' + f(r.within_corner_r2, 2) + "</td></tr>"; }).join("") + "</tbody>";
+      (cm.metrics || []).map(function (r) { return "<tr><td>" + names[r.model] + '</td><td class="num">' + f(r.rmse_kmh, 1) + ' km/h</td><td class="num">' + f(r.r2, 3) + '</td><td class="num">' + (r.model === "steady" || r.model === "physics" ? "n/a" : f(r.within_corner_r2, 2)) + "</td></tr>"; }).join("") +
+      '</tbody><tfoot><tr><td colspan="4" class="hint">Within-corner R² is n/a for the physics-only models: they predict the same speed for every car at a corner.</td></tr></tfoot>';
     var mm = {}; (cm.metrics || []).forEach(function (r) { mm[r.model] = r; });
     var ce = cm.coverage_by_event || {};
-    fill("corner_text", "Predicts each corner’s minimum speed at a circuit the model has never seen (every event there, in both seasons, is held out together). The physics baseline runs the lap simulator on the held-out track’s GPS geometry with a nominal car taken only from the training events’ calibrations. On unseen circuits it beats a black-box model clearly (R² " +
+    fill("corner_text", "Predicts each corner’s minimum speed at a circuit the model has never seen (every event there, in both seasons, is held out together). The physics baseline runs the lap simulator on the held-out track’s GPS geometry with a nominal car calibrated only on the training events, with nothing fitted to the held-out circuit. On unseen circuits it beats a black-box model clearly (R² " +
       f((mm.physics || {}).r2, 2) + " vs " + f((mm.ml || {}).r2, 2) + "), and adding machine learning on top changes little (" + f((mm.hybrid || {}).r2, 2) + "). Almost all of the variance is between corners, so R² mostly measures geometry: none of the models explains differences between cars at the same corner (within-corner R² ≈ 0 or below). Split-conformal 90% intervals cover " +
-      f(cm.conformal_coverage * 100, 1) + "% of held-out corners overall, but coverage varies by event (median " + f(ce.median * 100, 0) + "%, " + f(ce.share_below_80pct * 100, 0) + "% of events below 80%).");
+      f(cm.conformal_coverage * 100, 1) + "% of held-out corners overall, but coverage varies by event (median " + f(ce.median * 100, 0) + "%, worst " + f(ce.min * 100, 0) + "%, " + f(ce.share_below_80pct * 100, 0) + "% of events below 80%).");
     var def = (S.team_corner_deficit || {})[current.deficitSeason] || [];
     var teams = Array.from(new Set(def.map(function (r) { return r.team; })));
     var meanBy = {}; teams.forEach(function (tm) { meanBy[tm] = mean(def.filter(function (r) { return r.team === tm; }).map(function (r) { return r.deficit_kmh; })); });
@@ -542,23 +554,25 @@
       shapes: [{ type: "line", yref: "paper", y0: 0, y1: 1, x0: 0, x1: 0, line: { color: t.muted, width: 1 } }] }));
 
     var vs = S.variance_split || {}, yrs = Object.keys(vs).sort();
-    plot("ch-var", [{ y: yrs, x: yrs.map(function (y) { return vs[y].car_share * 100; }), type: "scatter", mode: "markers", marker: { size: 12, color: t.amr, line: { color: t.surface, width: 2 } },
-      error_x: { type: "data", symmetric: false, array: yrs.map(function (y) { return (vs[y].car_share_ci90[1] - vs[y].car_share) * 100; }), arrayminus: yrs.map(function (y) { return (vs[y].car_share - vs[y].car_share_ci90[0]) * 100; }), color: t.amr, thickness: 1.5, width: 0 },
-      hovertemplate: "%{y}: %{x:.0f}% between teams<extra></extra>" }],
+    plot("ch-var", [{ y: yrs, x: yrs.map(function (y) { return vs[y].median_event_share * 100; }), type: "scatter", mode: "markers", marker: { size: 12, color: t.amr, line: { color: t.surface, width: 2 } },
+      error_x: { type: "data", symmetric: false, array: yrs.map(function (y) { return (vs[y].event_share_iqr[1] - vs[y].median_event_share) * 100; }), arrayminus: yrs.map(function (y) { return (vs[y].median_event_share - vs[y].event_share_iqr[0]) * 100; }), color: t.amr, thickness: 1.5, width: 0 },
+      hovertemplate: "%{y}: %{x:.0f}% between teams (median event)<extra></extra>" }],
       layout(t, { margin: { l: 50, r: 16, t: 10, b: 44 }, xaxis: { title: { text: "% of variance between teams (car)" }, range: [0, 100] }, yaxis: { type: "category" } }));
-    if (yrs.length === 2) fill("var_text", "Within each event, qualifying gaps are split into a between-team part (mostly the car, but also how drivers are sorted into teams) and a within-team part (driver, lap execution, session and track evolution). Pooled, the between-team share was " +
-      f(vs[yrs[0]].car_share * 100, 0) + "% in " + yrs[0] + " (the median event: " + f(vs[yrs[0]].median_event_share * 100, 0) + "%) and " + f(vs[yrs[1]].car_share * 100, 0) + "% in " + yrs[1] +
-      " (median event " + f(vs[yrs[1]].median_event_share * 100, 0) + "%). Under the 2026 rules the qualifying order is almost entirely set by the car.");
+    if (yrs.length === 2) fill("var_text", "Within each event, qualifying gaps are split into a between-team part (mostly the car, but also how drivers are sorted into teams) and a within-team part (driver, lap execution, session and track evolution). Laps slower than 107% of the best are left out as non-representative (" +
+      (S.laps_outside_107pct || 0) + " laps). In the median event the between-team share was " + f(vs[yrs[0]].median_event_share * 100, 0) + "% in " + yrs[0] + " (middle half of events " + f(vs[yrs[0]].event_share_iqr[0] * 100, 0) + "–" + f(vs[yrs[0]].event_share_iqr[1] * 100, 0) +
+      "%) and " + f(vs[yrs[1]].median_event_share * 100, 0) + "% in " + yrs[1] + " (" + f(vs[yrs[1]].event_share_iqr[0] * 100, 0) + "–" + f(vs[yrs[1]].event_share_iqr[1] * 100, 0) + "%). Under the 2026 rules the qualifying order is almost entirely set by the car.");
 
-    var ws = (S.wind_sensitivity || []).slice().sort(function (a, b) { return ["low", "medium", "high"].indexOf(a.speed_class) - ["low", "medium", "high"].indexOf(b.speed_class); });
-    plot("ch-wind", [{ y: ws.map(function (r) { return r.speed_class + "-speed"; }), x: ws.map(function (r) { return r.kmh_per_ms_headwind; }), type: "scatter", mode: "markers", marker: { size: 11, color: t.ref, line: { color: t.surface, width: 2 } },
-      error_x: { type: "data", symmetric: false, array: ws.map(function (r) { return r.ci_hi - r.kmh_per_ms_headwind; }), arrayminus: ws.map(function (r) { return r.kmh_per_ms_headwind - r.ci_lo; }), color: t.ref, thickness: 1.5, width: 0 },
-      hovertemplate: "%{y}: %{x:+.2f} km/h per m/s<extra></extra>" }],
-      layout(t, { margin: { l: 100, r: 16, t: 10, b: 44 }, xaxis: { title: { text: "km/h per m/s headwind" } }, shapes: [{ type: "line", yref: "paper", y0: 0, y1: 1, x0: 0, x1: 0, line: { color: t.muted, width: 1 } }] }));
-    var sigW = ws.filter(function (r) { return r.ci_lo > 0 || r.ci_hi < 0; });
-    fill("wind_text", "The same corner, driven by different cars in different wind across two seasons, with corner and team-season fixed effects. " +
-      (sigW.length ? "Only the " + sigW.map(function (r) { return r.speed_class; }).join(", ") + "-speed class shows an interval clear of zero." : "No corner class shows an effect distinguishable from zero.") +
-      " The intervals (about ±1.5 km/h per m/s for fast corners) are wider than the effect steady-state physics predicts, and wind is only measured once per lap at one weather station, so the effect is not estimable from this data. The original prototype's 0.41 s crosswind attribution has no support.");
+    var wt = S.wind_rotation_test || {};
+    var ang = Object.keys(wt.mean_relative_sse || {}).map(Number).sort(function (x, y) { return x - y; });
+    plot("ch-wind", [{ x: ang, y: ang.map(function (a0) { return wt.mean_relative_sse[a0]; }), type: "scatter", mode: "lines+markers",
+      line: { color: t.ref, width: 2 }, marker: { size: 8, color: ang.map(function (a0) { return a0 === 0 ? t.third : t.ref; }), line: { color: t.surface, width: 1.5 } },
+      hovertemplate: "wind rotated %{x}°: %{y:.3f} of the ground-speed residual<extra></extra>" }],
+      layout(t, { margin: { l: 56, r: 16, t: 10, b: 44 }, xaxis: { title: { text: "rotation applied to the wind direction, °" }, dtick: 60 },
+        yaxis: { title: { text: "residual / no-wind residual" } },
+        shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 1, y1: 1, line: { color: t.muted, width: 1, dash: "dot" } }] }));
+    var best = wt.best_rotation_by_event || [];
+    fill("wind_text", "Wind components need the compass orientation of the timing X/Y frame, which the archive does not document. If both the orientation and the wind data were good, adding wind to the drag term should explain full-throttle acceleration better than ground speed, and best at 0° rotation. Across " +
+      (wt.n_events || 0) + " windy sessions no rotation improves the fit by more than a few percent, and the assumed orientation was best in " + f((wt.share_events_assumed_orientation_best || 0) * 100, 0) + "% of them, about what chance gives (1 in 12). Session-level wind readings are not informative enough to use, so dynamic pressure uses ground speed and no wind effect is claimed.");
     var dsum = S.deficit_summary || {}, d6 = dsum["2026"] || {}, d5 = dsum["2025"] || {};
     fill("accounting_text", "Giving the pole car’s calibrated simulator Aston Martin’s measured grip and straight-line figures accounts for " + f(d6.ratio_of_means * 100, 0) + "% of the mean 2026 gap (90% CI " +
       f((d6.ratio_ci90 || [])[0] * 100, 0) + "–" + f((d6.ratio_ci90 || [])[1] * 100, 0) + "%) and " + f(d5.ratio_of_means * 100, 0) + "% in 2025. It ranks the events reasonably (r = " + f(d6.correlation, 2) +
@@ -609,10 +623,11 @@
     syncHeaderOffset();
     window.addEventListener("resize", syncHeaderOffset);
     heroText();
+    seg("seg-rates", ["2025", "2026"], "2026", function (v) { current.rateSeason = v; renderRates(); });
     seg("seg-season", ["2025", "2026"], current.gapSeason, function (v) { current.gapSeason = v; renderGap(); renderCP(); });
     seg("seg-aero", ["2025", "2026"], current.aeroSeason, function (v) { current.aeroSeason = v; renderAero(); });
     seg("seg-deficit", ["2025", "2026"], current.deficitSeason, function (v) { current.deficitSeason = v; renderModels(); });
-    [renderProfile, renderHalves, renderGapClass, renderJoint, renderUpgradeParts, renderGap, renderCP, renderAero, renderSens, renderLap, renderSim, renderCalAcc, renderEnergy, renderRace, renderModels].forEach(register);
+    [renderProfile, renderHalves, renderRates, renderJoint, renderUpgradeParts, renderGap, renderCP, renderAero, renderSens, renderLap, renderSim, renderCalAcc, renderEnergy, renderRace, renderModels].forEach(register);
     renderDiD(); renderMethod();
     initEvents();
     var mq = window.matchMedia("(prefers-color-scheme: dark)");

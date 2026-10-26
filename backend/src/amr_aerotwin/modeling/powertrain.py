@@ -38,6 +38,8 @@ from amr_aerotwin.physics.vehicle_params import CRR, straight_segments
 
 TOW_GAP_M = 150.0
 MIN_SPEED_KMH = 150.0
+MIN_FIT_POSITIONS = 40  # 200 m of straight
+MIN_FIT_SPEED_SPAN_KMH = 60.0
 
 
 def max_fit_speed_kmh(season: int) -> float:
@@ -75,18 +77,22 @@ class PowerDragFit:
 
 def fit_power_drag(states: list[VehicleState], mask: NDArray[np.bool_]) -> PowerDragFit | None:
     """Least-squares (P, CdA) from one team's laps on the acceleration-phase positions."""
-    xs, ys = [], []
+    xs, ys, pos, speeds = [], [], set(), []
     for st in states:
         sel = lap_samples(st, mask)
         if sel.sum() == 0:
             continue
+        pos.update(np.flatnonzero(sel).tolist())
+        speeds.append(st.speed_smooth_ms[sel] * 3.6)
         v = st.speed_smooth_ms[sel]
         ys.append(st.mass_kg * (st.ax_propulsive_ms2[sel] + GRAVITY_ACCEL * CRR))
         xs.append(np.column_stack([1.0 / v, -st.q_dyn_pa[sel]]))
     if not xs:
         return None
     x, y = np.vstack(xs), np.concatenate(ys)
-    if len(y) < 15:
+    v_all = np.concatenate(speeds)
+    # Two collinear terms need a long stretch of straight and a wide speed range to be fitted
+    if len(pos) < MIN_FIT_POSITIONS or np.ptp(v_all) < MIN_FIT_SPEED_SPAN_KMH:
         return None
     beta = np.linalg.lstsq(x, y, rcond=None)[0]
     return PowerDragFit(power_kw=float(beta[0] / 1000.0), cda_m2=float(beta[1]), n_samples=len(y))
@@ -170,7 +176,9 @@ def per_event_deltas(rows: pd.DataFrame, team: str) -> pd.DataFrame:
 
 def joint_deficit(rows: pd.DataFrame, team: str, n_boot: int = 2000, seed: int = 0,
                   exclude_round: int | None = None) -> JointDeficit | None:
-    """Event-bootstrap of the mean (dP, dCdA) of `team` vs the field, for one season of rows."""
+    """Event-bootstrap of the median (dP, dCdA) of `team` vs the field, for one season of rows.
+
+    Medians, because single-event fits of two collinear terms can be wild."""
     pe = per_event_deltas(rows, team)
     if exclude_round is not None and not pe.empty:
         pe = pe[pe["round"] != exclude_round]
@@ -178,7 +186,7 @@ def joint_deficit(rows: pd.DataFrame, team: str, n_boot: int = 2000, seed: int =
         return None
     arr = pe[["d_power_kw", "d_cda_m2"]].to_numpy()
     rng = np.random.default_rng(seed)
-    draws = arr[rng.integers(0, len(arr), size=(n_boot, len(arr)))].mean(axis=1)
+    draws = np.median(arr[rng.integers(0, len(arr), size=(n_boot, len(arr)))], axis=1)
     mk = pe["matched_kw"].dropna().to_numpy()
     mk_boot = mk[rng.integers(0, len(mk), size=(n_boot, len(mk)))].mean(axis=1) if len(mk) else np.array([np.nan])
 
@@ -186,9 +194,63 @@ def joint_deficit(rows: pd.DataFrame, team: str, n_boot: int = 2000, seed: int =
         return float(np.nanpercentile(a, 5)), float(np.nanpercentile(a, 95))
 
     return JointDeficit(
-        d_power_kw=float(arr[:, 0].mean()), d_power_ci90=ci(draws[:, 0]),
-        d_cda_m2=float(arr[:, 1].mean()), d_cda_ci90=ci(draws[:, 1]),
+        d_power_kw=float(np.median(arr[:, 0])), d_power_ci90=ci(draws[:, 0]),
+        d_cda_m2=float(np.median(arr[:, 1])), d_cda_ci90=ci(draws[:, 1]),
         correlation=float(np.corrcoef(draws[:, 0], draws[:, 1])[0, 1]),
         matched_kw=float(np.mean(mk)) if len(mk) else float("nan"), matched_ci90=ci(mk_boot),
         n_events=len(pe), draws=draws, per_event=pe,
     )
+
+
+WIND_TEST_ANGLES = tuple(range(0, 360, 30))
+
+
+def wind_rotation_test(states: dict[str, VehicleState], ref: VehicleState, min_wind_ms: float = 2.0) -> dict | None:
+    """Check whether the wind correction helps explain full-throttle acceleration.
+
+    Wind components need the compass orientation of the timing X/Y frame. If the assumed
+    orientation (X = East, Y = North) is right, using airspeed instead of ground speed in
+    the drag term should reduce the residual of the (P, CdA) fits, and rotating the wind by
+    any other angle should do worse. Returns the residual sum of squares relative to the
+    ground-speed fit for each rotation, or None when the session was nearly calm.
+    """
+    from dataclasses import replace
+
+    from amr_aerotwin.physics.kinematics import decompose_aero_wind_vectors
+
+    wind = float(np.median([s.lap.ambient.wind_speed_ms for s in states.values()]))
+    if wind < min_wind_ms:
+        return None
+    mask = acceleration_phase_mask(list(states.values()), ref)
+    by_team: dict[str, list[VehicleState]] = {}
+    for st in states.values():
+        by_team.setdefault(st.lap.meta.team, []).append(st)
+
+    def sse(q_of: object) -> float:
+        total = 0.0
+        for sts in by_team.values():
+            xs, ys = [], []
+            for st in sts:
+                sel = lap_samples(st, mask)
+                if sel.sum() < 5:
+                    continue
+                v = st.speed_smooth_ms[sel]
+                ys.append(st.mass_kg * (st.ax_propulsive_ms2[sel] + GRAVITY_ACCEL * CRR))
+                xs.append(np.column_stack([1.0 / v, -q_of(st)[sel]]))  # type: ignore[operator]
+            if xs:
+                x, y = np.vstack(xs), np.concatenate(ys)
+                beta = np.linalg.lstsq(x, y, rcond=None)[0]
+                total += float(np.sum((y - x @ beta) ** 2))
+        return total
+
+    ground = sse(lambda st: 0.5 * st.rho_kg_m3 * st.speed_smooth_ms**2)
+    if ground <= 0:
+        return None
+    rel = {}
+    for a in WIND_TEST_ANGLES:
+        def q_air(st: VehicleState, a: int = a) -> np.ndarray:
+            amb = replace(st.lap.ambient, wind_direction_deg=(st.lap.ambient.wind_direction_deg + a) % 360)
+            w = decompose_aero_wind_vectors(st.speed_smooth_ms, st.heading_rad, amb)
+            return 0.5 * st.rho_kg_m3 * w["v_airspeed_ms"] ** 2
+        rel[a] = sse(q_air) / ground
+    return {"wind_ms": wind, "relative_sse": rel, "best_rotation_deg": int(min(rel, key=rel.get))}

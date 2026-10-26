@@ -25,10 +25,9 @@ from amr_aerotwin.modeling.corner_model import (
     cross_validate,
     hybrid_shapley,
     team_corner_deficit,
-    wind_sensitivity,
 )
 from amr_aerotwin.modeling.energy import relative_metric, speed_gap_profile
-from amr_aerotwin.modeling.powertrain import joint_deficit
+from amr_aerotwin.modeling.powertrain import joint_deficit  # noqa: F401  (used by powertrain_analysis)
 from amr_aerotwin.modeling.season import (
     bayesian_changepoint,
     car_vs_driver_variance,
@@ -79,6 +78,7 @@ def fetch(years: list[int], cache_dir: Path = DEFAULT_CACHE_DIR, workers: int = 
     cutoff = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=RECENT_DAYS)).strftime("%Y-%m-%d")
     for r in cal[cal["date"] >= cutoff].itertuples():
         log.info("re-fetching recent event %s %s (%d cached files)", r.season, r.event, repo.invalidate_event(r.season, r.event))
+    failures = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(prefetch_event, repo, r.season, r.event): r for r in cal.itertuples()}
         for f in as_completed(futs):
@@ -88,7 +88,18 @@ def fetch(years: list[int], cache_dir: Path = DEFAULT_CACHE_DIR, workers: int = 
                 log.info("fetched %s %s", r.season, r.event)
             except Exception as err:  # noqa: BLE001
                 log.warning("fetch failed %s %s: %s", r.season, r.event, err)
+                failures[f"{r.season}|{r.event}"] = str(err)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    (PROCESSED_DIR / "fetch_failures.json").write_text(json.dumps(failures, indent=1), encoding="utf-8")
     return cal
+
+
+def _fetch_failures(out_dir: Path) -> dict[str, str]:
+    p = out_dir / "fetch_failures.json"
+    try:
+        return json.loads(p.read_text()) if p.exists() else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _worker(args: tuple[str, int, str, int, bool]) -> Any:
@@ -125,6 +136,9 @@ def build(
             except Exception as err:  # noqa: BLE001 - a crashed worker must not lose the season
                 res = f"worker crashed: {type(err).__name__}: {err}"
             if isinstance(res, str):
+                fetch_fail = _fetch_failures(out_dir).get(f"{job[1]}|{job[2]}")
+                if fetch_fail and "Not cached" in res:
+                    res = f"archive file unavailable at fetch time ({fetch_fail})"
                 log.warning("skipped %s %s: %s", job[1], job[2], res)
                 skipped.append({"season": job[1], "event": job[2], "reason": res})
                 continue
@@ -154,9 +168,13 @@ def build(
         "race_pace": cat([o.race_rows for o in outputs]),
         "accel": cat([o.accel_rows for o in outputs]),
         "profile": cat([o.profile_rows for o in outputs]),
+        "timing": cat([o.timing_rows for o in outputs]),
+        "sections": cat([o.section_rows for o in outputs]),
     }
     for name, df in tables.items():
-        df.to_csv(out_dir / f"{name}.csv.gz", index=False)
+        tmp = out_dir / f".{name}.csv.gz.tmp"
+        df.to_csv(tmp, index=False, compression="gzip")
+        tmp.replace(out_dir / f"{name}.csv.gz")
     cal.to_csv(out_dir / "calendar.csv", index=False)
     (out_dir / "skipped.json").write_text(json.dumps(sorted(skipped, key=lambda r: (r["season"], r["event"])), indent=1), encoding="utf-8")
     return tables
@@ -166,12 +184,23 @@ def load_tables(out_dir: Path = PROCESSED_DIR) -> dict[str, pd.DataFrame]:
     def read(name: str) -> pd.DataFrame:
         try:
             return pd.read_csv(out_dir / f"{name}.csv.gz")
-        except pd.errors.EmptyDataError:
+        except (pd.errors.EmptyDataError, FileNotFoundError):
             return pd.DataFrame()
-    return {n: read(n) for n in ("drivers", "teams", "corners", "race_pace", "accel", "profile")}
+    return {n: read(n) for n in ("drivers", "teams", "corners", "race_pace", "accel", "profile", "timing", "sections")}
 
 
 # --------------------------------------------------------------------------- analyses
+def rel_to_other_teams(df: pd.DataFrame, col: str, keys: tuple[str, ...] = ("season", "round")) -> pd.Series:
+    """Each team's value divided by the median of the *other* teams at the same event."""
+    out = pd.Series(np.nan, index=df.index)
+    for _, g in df.groupby(list(keys)):
+        for i, row in g.iterrows():
+            o = g.loc[g["team"] != row["team"], col].dropna()
+            if len(o) >= 4 and np.isfinite(row[col]):
+                out[i] = row[col] / o.median()
+    return out
+
+
 def _bootstrap_mean(values: np.ndarray, n_boot: int = 1000, seed: int = 0) -> tuple[float, float, float]:
     v = np.asarray(values, float)
     v = v[np.isfinite(v)]
@@ -190,9 +219,8 @@ def aero_map(teams: pd.DataFrame, events: dict[str, dict]) -> dict[str, Any]:
       dCdA% ~ -3 dV%                     (drag-limited speed  v ~ CdA^(-1/3))
     """
     t = teams[teams["geometry_ok"].astype(bool)].copy()
-    med = t.groupby(["season", "round"])["grip_high_g"].transform("median")
     share = t.groupby(["season", "round"])["aero_share_high"].transform("median")
-    t["d_grip_pct"] = (t["grip_high_g"] / med - 1) * 100
+    t["d_grip_pct"] = (rel_to_other_teams(t, "grip_high_g") - 1) * 100
     t["d_cla_equiv_pct"] = t["d_grip_pct"] / share.clip(lower=0.2)
     t["d_speed_pct"] = t["straight_speed_delta_kmh"] / t["straight_peak_kmh"] * 100
     t["d_cda_equiv_pct"] = -3.0 * t["d_speed_pct"]
@@ -294,18 +322,65 @@ def _ratio_se(a: float, a_lo: float, a_hi: float, b: float, b_lo: float, b_hi: f
     return float((a / b) * np.sqrt(sa**2 + sb**2))
 
 
-def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame, accel: pd.DataFrame,
-                          target: str = TARGET_TEAM, n_draws: int = 120, seed: int = 9) -> list[dict[str, Any]]:
-    """Decompose the target team's qualifying gap to pole at each event with the lap sim.
+def _straight_peaks_kmh(speed_ms: np.ndarray, kappa: np.ndarray, step_m: float, min_len_m: float = 350.0,
+                        windows: list | None = None) -> float:
+    """Mean peak speed over the lap's straights. With `windows` (the same index windows used to
+    measure the teams' top-speed gap), peaks are taken there; otherwise over runs with
+    |curvature| < 1/1000 m of at least min_len_m."""
+    if windows:
+        return float(np.mean([np.max(speed_ms[lo:hi + 1]) for lo, hi in windows]) * 3.6)
+    straight = np.abs(kappa) < 1e-3
+    peaks, run = [], []
+    for i, flag in enumerate(np.append(straight, False)):
+        if flag:
+            run.append(i)
+        elif run:
+            if len(run) * step_m >= min_len_m:
+                peaks.append(float(np.max(speed_ms[run])))
+            run = []
+    return float(np.mean(peaks) * 3.6) if peaks else float("nan")
 
-    The pole car's calibrated simulator is modified by (a) the target team's measured grip
-    ratio at low and high dynamic pressure and (b) its straight-line (dP, dCdA) relative to
-    the pole team, estimated *without this event* (leave-one-event-out). This is an
-    accounting of the gap in physical terms, not an out-of-sample prediction: the grip
-    ratios come from the same laps. Uncertainty propagates the pole car's parameter
-    posterior, the grip-ratio intervals and the bootstrap of (dP, dCdA).
-    """
+
+def _with_drag(pv: VehicleParams, d_cda: float) -> VehicleParams:
     from dataclasses import replace
+
+    return replace(pv, cda_m2=max(pv.cda_m2 + d_cda, 0.2),
+                   low_drag_cda_m2=None if pv.low_drag_cda_m2 is None else max(pv.low_drag_cda_m2 + d_cda, 0.2))
+
+
+def match_drag_to_top_speed(base: VehicleParams, s_grid: np.ndarray, kappa: np.ndarray, mask: np.ndarray | None,
+                            length: float, dv_kmh: float, lo: float = -0.8, hi: float = 2.5,
+                            windows: list | None = None) -> float:
+    """Effective drag-area change (m^2) that moves the simulated straight-line peak speed by dv_kmh.
+
+    Peak speed falls monotonically with drag, so bisection converges; the result is clipped
+    to [lo, hi] when the requested change is outside what that range can produce.
+    """
+    step = float(s_grid[1] - s_grid[0])
+    v0 = _straight_peaks_kmh(simulate_lap(s_grid, kappa, base, mask, length).speed_ms, kappa, step, windows=windows)
+    for _ in range(20):
+        mid = 0.5 * (lo + hi)
+        dv = _straight_peaks_kmh(simulate_lap(s_grid, kappa, _with_drag(base, mid), mask, length).speed_ms, kappa, step,
+                                 windows=windows) - v0
+        lo, hi = (mid, hi) if dv > dv_kmh else (lo, mid)
+    return 0.5 * (lo + hi)
+
+
+def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame,
+                          target: str = TARGET_TEAM, n_draws: int = 80, seed: int = 9) -> list[dict[str, Any]]:
+    """Account for the target team's qualifying gap to pole at each event with the lap sim.
+
+    The pole car's calibrated simulator is modified by
+    (a) the target team's measured grip ratio to the pole team at low and high dynamic
+        pressure (two equations for mu and ClA), and
+    (b) one effective drag change chosen so the simulated peak speed on the straights moves by
+        the *measured* top-speed gap between the two teams. Power and drag are not separately
+        identifiable from public data (see modeling/powertrain.py), so a single effective
+        parameter matched to an observable is used instead of a two-parameter fit.
+    This is an accounting of the gap in physical terms, not an out-of-sample prediction: the
+    inputs come from the same laps. Uncertainty propagates the pole car's parameter
+    posterior and the grip-ratio intervals.
+    """
 
     rng = np.random.default_rng(seed)
     rows = []
@@ -320,12 +395,8 @@ def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame, accel: p
         if target not in t.index or pole_team not in t.index:
             continue
         a, p = t.loc[target], t.loc[pole_team]
-        if not np.all(np.isfinite([a.grip_low_g, a.grip_high_g, p.grip_low_g, p.grip_high_g])):
-            continue
-        acc = accel[accel["season"] == e["season"]]
-        jt = joint_deficit(acc, target, exclude_round=e["round"], n_boot=n_draws, seed=seed)
-        jp = joint_deficit(acc, pole_team, exclude_round=e["round"], n_boot=n_draws, seed=seed + 1)
-        if jt is None or jp is None:
+        dv_meas = float(a.straight_speed_delta_kmh - p.straight_speed_delta_kmh)
+        if not np.all(np.isfinite([a.grip_low_g, a.grip_high_g, p.grip_low_g, p.grip_high_g, dv_meas])):
             continue
         sb = e["sandbox"]
         ls = e["lapsim"][pole_drv]
@@ -344,28 +415,28 @@ def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame, accel: p
         length = sb["lap_length_m"]
         q_l, q_h = e["track"]["q_low_pa"], e["track"]["q_high_pa"]
 
-        def straight(pv: VehicleParams, d_kw: float, d_cda: float) -> VehicleParams:
-            return replace(pv, power_w=max(pv.power_w + d_kw * 1000.0, 1e4), cda_m2=max(pv.cda_m2 + d_cda, 0.2),
-                           low_drag_cda_m2=None if pv.low_drag_cda_m2 is None else max(pv.low_drag_cda_m2 + d_cda, 0.2))
+        drag = _with_drag
 
-        def components(base: VehicleParams, r_l: float, r_h: float, d_kw: float, d_cda: float) -> tuple[float, float, float, bool]:
-            t0 = simulate_lap(s_grid, kappa, base, mask, length).lap_time_s
-            gp, clamped = grip_matched_params(base, r_l, r_h, q_l, q_h)
-            grip_s = simulate_lap(s_grid, kappa, gp, mask, length).lap_time_s - t0
-            str_s = simulate_lap(s_grid, kappa, straight(base, d_kw, d_cda), mask, length).lap_time_s - t0
-            both = simulate_lap(s_grid, kappa, straight(gp, d_kw, d_cda), mask, length).lap_time_s - t0
-            return grip_s, str_s, both, clamped
+        def sim(pv: VehicleParams):
+            return simulate_lap(s_grid, kappa, pv, mask, length)
+
+        base = car(pp)
+        windows = sb.get("straight_windows") or None
+        d_cda = match_drag_to_top_speed(base, s_grid, kappa, mask, length, dv_meas, windows=windows)
+
+        def components(b: VehicleParams, r_l: float, r_h: float) -> tuple[float, float, float, bool]:
+            t0 = sim(b).lap_time_s
+            gp, clamped = grip_matched_params(b, r_l, r_h, q_l, q_h)
+            return (sim(gp).lap_time_s - t0, sim(drag(b, d_cda)).lap_time_s - t0,
+                    sim(drag(gp, d_cda)).lap_time_s - t0, clamped)
 
         r_low, r_high = a.grip_low_g / p.grip_low_g, a.grip_high_g / p.grip_high_g
-        d_kw, d_cda = jt.d_power_kw - jp.d_power_kw, jt.d_cda_m2 - jp.d_cda_m2
-        grip_s, str_s, both, clamped = components(car(pp), r_low, r_high, d_kw, d_cda)
-
+        grip_s, str_s, both, clamped = components(base, r_low, r_high)
         se_l = _ratio_se(a.grip_low_g, a.grip_low_lo, a.grip_low_hi, p.grip_low_g, p.grip_low_lo, p.grip_low_hi)
         se_h = _ratio_se(a.grip_high_g, a.grip_high_lo, a.grip_high_hi, p.grip_high_g, p.grip_high_lo, p.grip_high_hi)
         post = _posterior_draws(ls, n_draws, rng)
-        dd = jt.draws - jp.draws[rng.permutation(len(jp.draws))]
-        sims = np.array([components(car(post[i]), max(rng.normal(r_low, se_l), 0.5), max(rng.normal(r_high, se_h), 0.5),
-                                    dd[i, 0], dd[i, 1])[:3] for i in range(n_draws)])
+        sims = np.array([components(car(post[i]), max(rng.normal(r_low, se_l), 0.5), max(rng.normal(r_high, se_h), 0.5))[:3]
+                         for i in range(n_draws)])
         rows.append({
             "season": e["season"], "round": e["round"], "event": e["event"], "pole_team": pole_team,
             "actual_gap_s": float(a.lap_time_s - p.lap_time_s),
@@ -374,8 +445,8 @@ def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame, accel: p
             "straight_ci90": [float(np.percentile(sims[:, 1], 5)), float(np.percentile(sims[:, 1], 95))],
             "grip_ci90": [float(np.percentile(sims[:, 0], 5)), float(np.percentile(sims[:, 0], 95))],
             "straight_draws": sims[:, 1].tolist(), "predicted_draws": sims[:, 2].tolist(),
-            "d_power_kw": d_kw, "d_cda_m2": d_cda, "grip_low_ratio": r_low, "grip_high_ratio": r_high,
-            "grip_clamped": clamped,
+            "measured_top_speed_gap_kmh": dv_meas, "effective_d_cda_m2": d_cda,
+            "grip_low_ratio": r_low, "grip_high_ratio": r_high, "grip_clamped": clamped,
         })
     return sorted(rows, key=lambda r: (r["season"], r["round"]))
 
@@ -393,7 +464,10 @@ def decomposition_summary(rows: list[dict[str, Any]], n_boot: int = 4000, seed: 
         idx = rng.integers(0, n, size=(n_boot, n))
         ratio_boot = pred[idx].sum(1) / act[idx].sum(1)
         sd = np.array(g["straight_draws"].tolist())  # events x draws
-        straight_mean_draws = sd.mean(axis=0)
+        # Resample events and, within each, one posterior draw: between-event spread plus
+        # each event's parameter uncertainty
+        pick = rng.integers(0, sd.shape[1], size=(n_boot, n))
+        straight_mean_draws = sd[idx, pick].mean(axis=1)
         r = float(np.corrcoef(pred, act)[0, 1]) if n > 2 else float("nan")
         zr, se = np.arctanh(np.clip(r, -0.999, 0.999)), 1 / np.sqrt(max(n - 3, 1))
         out[str(season)] = {
@@ -418,8 +492,8 @@ def upgrade_component_shift(teams: pd.DataFrame, accel: pd.DataFrame, season: in
     """What an upgrade changed: cornering grip vs straight-line performance, before vs after.
 
     Grip is relative to the median of the *other* teams at each event. The uncertainty of a
-    period mean combines between-event spread with each event's own fit interval, and the
-    shift is reported with its z-score, so small samples are visible as such.
+    period mean is the between-event standard error, and the shift is reported with its
+    z-score and event counts, so small samples are visible as such.
     """
     t = teams[teams["season"] == season].copy()
     ev = t[t["event"] == event]
@@ -443,8 +517,9 @@ def upgrade_component_shift(teams: pd.DataFrame, accel: pd.DataFrame, season: in
         n = len(d)
         if n == 0:
             return {"mean": float("nan"), "se": float("nan"), "n": 0}
-        between = float(d["ratio"].var(ddof=1)) if n > 1 else 0.0
-        se = float(np.sqrt(between / n + float(np.mean(d["se"] ** 2)) / n))
+        # Between-event spread already contains each event's measurement error; with a single
+        # event, fall back on that event's own fit uncertainty.
+        se = float(d["ratio"].std(ddof=1) / np.sqrt(n)) if n > 1 else float(d["se"].iloc[0])
         return {"mean": float(d["ratio"].mean()), "se": se, "n": n}
 
     out: dict[str, Any] = {"season": season, "event": event, "round": r0}
@@ -460,13 +535,6 @@ def upgrade_component_shift(teams: pd.DataFrame, accel: pd.DataFrame, season: in
     for label, sel in (("before", sp["round"] < r0), ("after", sp["round"] >= r0)):
         v = sp[sel]["straight_speed_delta_kmh"].dropna()
         out.setdefault("straight_speed_delta_kmh", {})[label] = {"mean": float(v.mean()) if len(v) else float("nan"), "n": int(len(v))}
-    acc = accel[accel["season"] == season]
-    for label, sel in (("before", acc["round"] < r0), ("after", acc["round"] >= r0)):
-        jd = joint_deficit(acc[sel], target)
-        out.setdefault("straight_line", {})[label] = None if jd is None else {
-            "d_power_kw": jd.d_power_kw, "d_power_ci90": list(jd.d_power_ci90),
-            "d_cda_m2": jd.d_cda_m2, "d_cda_ci90": list(jd.d_cda_ci90),
-            "matched_kw": jd.matched_kw, "matched_ci90": list(jd.matched_ci90), "n_events": jd.n_events}
     return out
 
 
@@ -513,6 +581,67 @@ def geometry_sim_speeds(events: dict[str, dict], window_m: float = 60.0,
     return pd.DataFrame(rows)
 
 
+def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
+                         target: str = TARGET_TEAM, min_events: int = 5) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Per season and team: time lost to pole in each section as a % of the pole lap's time there.
+
+    Rates are ratios of sums over events (seconds lost / seconds spent), so an event where a
+    section is short does not get the same weight as one where it is long. The bootstrap
+    resamples events. Also reports how each team's straight-line rate compares with its
+    corner rate, which separates a uniform deficit from a section-specific one, and the
+    target's straight-line rate over the highest of any other team's, with the maximum taken
+    inside each bootstrap draw so the interval covers "than any other team".
+    """
+    rng = np.random.default_rng(seed)
+    out: dict[str, Any] = {}
+    vs_field: dict[str, Any] = {}
+    for season, g in sec.groupby("season"):
+        teams_out = {}
+        st_boot: dict[str, np.ndarray] = {}
+        for team, gt in g.groupby("team"):
+            piv_l = gt.pivot_table(index="round", columns="section", values="loss_s", aggfunc="sum")
+            piv_r = gt.pivot_table(index="round", columns="section", values="reference_time_s", aggfunc="sum")
+            if len(piv_l) < 3:
+                continue
+            cols = list(piv_l.columns)
+            L, R = piv_l.to_numpy(), piv_r.reindex(columns=cols).to_numpy()
+            idx = rng.integers(0, len(L), size=(n_boot, len(L)))
+            rate = 100 * np.nansum(L, 0) / np.nansum(R, 0)
+            boot = 100 * np.nansum(L[idx], 1) / np.nansum(R[idx], 1)
+            lap_rate = 100 * np.nansum(L) / np.nansum(R)
+            corners = [i for i, c in enumerate(cols) if c != "straights"]
+            st_i = cols.index("straights") if "straights" in cols else None
+            row = {"sections": cols, "rate_pct": rate.tolist(),
+                   "ci_lo": np.percentile(boot, 5, 0).tolist(), "ci_hi": np.percentile(boot, 95, 0).tolist(),
+                   "lap_rate_pct": float(lap_rate), "n_events": int(len(L))}
+            if st_i is not None and corners:
+                corner_rate = 100 * np.nansum(L[:, corners]) / np.nansum(R[:, corners])
+                b_corner = 100 * np.nansum(L[idx][:, :, corners], (1, 2)) / np.nansum(R[idx][:, :, corners], (1, 2))
+                ratio = boot[:, st_i] / np.where(np.abs(b_corner) > 1e-9, b_corner, np.nan)
+                row.update({"corner_rate_pct": float(corner_rate),
+                            "straight_to_corner_ratio": float(rate[st_i] / corner_rate) if corner_rate else float("nan"),
+                            "straight_to_corner_ci90": [float(np.nanpercentile(ratio, 5)), float(np.nanpercentile(ratio, 95))]})
+            if st_i is not None and len(L) >= min_events:
+                st_boot[team] = boot[:, st_i]
+            teams_out[team] = row
+        if target in st_boot and len(st_boot) > 1:
+            rivals = [t for t in st_boot if t != target]
+            point = {t: teams_out[t]["rate_pct"][teams_out[t]["sections"].index("straights")] for t in rivals}
+            nxt = max(point, key=point.get)
+            t_rate = teams_out[target]["rate_pct"][teams_out[target]["sections"].index("straights")]
+            best_rival = np.max(np.column_stack([st_boot[t] for t in rivals]), axis=1)
+            ratio_b = st_boot[target] / np.where(best_rival > 1e-9, best_rival, np.nan)
+            vs_field[str(season)] = _r({
+                "next_team": nxt, "next_rate_pct": point[nxt],
+                "ratio": t_rate / point[nxt] if point[nxt] > 0 else float("nan"),
+                "ratio_ci90": [float(np.nanpercentile(ratio_b, 5)), float(np.nanpercentile(ratio_b, 95))],
+                "p_ratio_above_2": float(np.nanmean(ratio_b > 2)),
+                "n_rivals": len(rivals),
+            }, 4)
+        out[str(season)] = _r(teams_out, 4)
+    return out, vs_field
+
+
 def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) -> dict[str, Any]:
     tables = load_tables(out_dir)
     events = {p.stem: json.loads(p.read_text()) for p in sorted((out_dir / "events").glob("*.json"))}
@@ -521,13 +650,21 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
     result: dict[str, Any] = {"n_events": len(events)}
 
     # Supertimes and AMR changepoints
-    st = supertime_table(drivers.rename(columns={"lap_time_s": "lap_time_s"}))
+    # Pace analyses use official timing for every driver, not only laps with usable telemetry
+    timing = tables["timing"] if not tables["timing"].empty else drivers
+    # FIA 107% rule: slower laps (crash, red flag, a wet session segment) are not pace
+    best_all = timing.groupby(["season", "round"])["lap_time_s"].transform("min")
+    result["laps_outside_107pct"] = int((timing["lap_time_s"] > 1.07 * best_all).sum())
+    timing = timing[timing["lap_time_s"] <= 1.07 * best_all]
+    st = supertime_table(timing)
     result["supertimes"] = _r(st.to_dict("records"), 3)
     teams = tables["teams"]
+    # Track character (share of the pole lap in fast corners) is an event property
+    event_track_x = teams.groupby(["season", "round"], as_index=False)["track_x"].first()
     cps = {}
     for season, g in st[st["team"] == TARGET_TEAM].groupby("season"):
         g = g.sort_values("round")
-        x = teams[(teams["season"] == season) & (teams["team"] == TARGET_TEAM)].set_index("round")["track_x"].reindex(g["round"])
+        x = event_track_x[event_track_x["season"] == season].set_index("round")["track_x"].reindex(g["round"])
         xv = x.fillna(x.mean()).to_numpy()
         cp = bayesian_changepoint(g["gap_pct"].to_numpy(), xv, list(g["event"]), g["round"].to_numpy())
         sens = {str(gg): float(bayesian_changepoint(g["gap_pct"].to_numpy(), xv, g=gg).p_no_change) for gg in (1.0, 10.0, 100.0)}
@@ -542,10 +679,12 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
 
     # Car vs driver
     result["variance_split"] = {}
-    for season, g in drivers.groupby("season"):
+    for season, g in timing.groupby("season"):
         vs = car_vs_driver_variance(g[["season", "round", "team", "driver", "lap_time_s"]])
         result["variance_split"][str(season)] = _r(vs.__dict__, 4)
-    amr = drivers[drivers["team"] == TARGET_TEAM]
+    best_t = timing.groupby(["season", "round"])["lap_time_s"].transform("min")
+    amr = timing.assign(gap_pct=(timing["lap_time_s"] / best_t - 1) * 100)
+    amr = amr[amr["team"] == TARGET_TEAM]
     h2h = amr.pivot_table(index=["season", "round"], columns="driver", values="gap_pct")
     result["amr_teammates"] = {str(s): _r({c: float(g[c].mean()) for c in g.columns if g[c].notna().sum() > 2}, 3)
                                for s, g in h2h.groupby(level=0)}
@@ -554,7 +693,7 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
     if upgrades_csv.exists():
         ups = pd.read_csv(upgrades_csv)
         major = ups[ups["major_performance_upgrade"].isin(["major", "partial"])]
-        panel = st.merge(teams[["season", "round", "team", "track_x"]], on=["season", "round", "team"], how="left")
+        panel = st.merge(event_track_x, on=["season", "round"], how="left")
         effects = upgrade_effects(panel, major[["season", "grand_prix"]].rename(columns={"grand_prix": "event"}), TARGET_TEAM)
         # Holm adjustment of the team-placebo p-values across the declared upgrades tested
         order = np.argsort([e.team_placebo_p for e in effects])
@@ -602,7 +741,6 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         deficit_by_season.append(dd)
     result["team_corner_deficit"] = {str(s): _r(d.drop(columns="season").to_dict("records"), 3)
                                      for s, d in pd.concat(deficit_by_season).groupby("season")}
-    result["wind_sensitivity"] = _r(wind_sensitivity(corners).to_dict("records"), 4)
     cr = corners.reset_index(drop=True)
     amr_rows = np.flatnonzero((cr["team"] == TARGET_TEAM).to_numpy())
     phi, names = hybrid_shapley(cr, amr_rows)
@@ -638,6 +776,12 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
                 "per_event": g[["round", "event", "class", "time_s"]].to_dict("records"),
             }, 4)
 
+    # Loss rate to pole by section for every team (normalised by the pole lap's time there)
+    sec = tables.get("sections", pd.DataFrame())
+    result["section_rates"], result["straight_vs_field"] = {}, {}
+    if not sec.empty:
+        result["section_rates"], result["straight_vs_field"] = section_rate_summary(sec)
+
     # Where along the straights each team gains or loses speed (model-free, position-matched)
     prof = tables.get("profile", pd.DataFrame())
     result["straight_profile"] = {}
@@ -658,7 +802,7 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
 
     # Straight-line power/drag, and the physics accounting of the target team's gap to pole
     result["powertrain"] = powertrain_analysis(tables["accel"])
-    decomp = deficit_decomposition(events, teams, tables["accel"])
+    decomp = deficit_decomposition(events, teams)
     result["deficit_summary"] = _r(decomposition_summary(decomp), 4) if decomp else {}
     result["deficit_decomposition"] = _r([{k: v for k, v in r.items() if not k.endswith("_draws")} for r in decomp], 4)
     if upgrades_csv.exists():
@@ -670,8 +814,8 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         ]
 
     tt = teams.copy()
-    tt["grip_high_rel"] = tt["grip_high_g"] / tt.groupby(["season", "round"])["grip_high_g"].transform("median")
-    tt["grip_low_rel"] = tt["grip_low_g"] / tt.groupby(["season", "round"])["grip_low_g"].transform("median")
+    tt["grip_high_rel"] = rel_to_other_teams(tt, "grip_high_g")
+    tt["grip_low_rel"] = rel_to_other_teams(tt, "grip_low_g")
     result["amr_component_series"] = {
         str(s_): _r(g.sort_values("round")[["round", "event", "gap_pct", "grip_high_rel", "grip_low_rel",
                                              "straight_speed_delta_kmh", "clip_time_loss_s"]].to_dict("records"), 4)
@@ -694,6 +838,18 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
     if not rp.empty:
         result["race_pace"] = _r(rp.groupby(["season", "team"])["gap_s"].agg(["mean", "median", "count"]).reset_index().to_dict("records"), 3)
         result["race_pace_by_event"] = _r(rp[["season", "round", "event", "team", "gap_s", "ci_lo", "ci_hi"]].to_dict("records"), 3)
+
+    # Wind frame check across windy sessions
+    wt = [e["wind_rotation_test"] for e in events.values() if e.get("wind_rotation_test")]
+    if wt:
+        angles = sorted(int(a) for a in wt[0]["relative_sse"])
+        mean_rel = {a: float(np.mean([w["relative_sse"][str(a)] if str(a) in w["relative_sse"] else w["relative_sse"][a] for w in wt])) for a in angles}
+        result["wind_rotation_test"] = _r({
+            "n_events": len(wt), "mean_relative_sse": mean_rel,
+            "best_rotation_by_event": [w["best_rotation_deg"] for w in wt],
+            "share_events_assumed_orientation_best": float(np.mean([w["best_rotation_deg"] == 0 for w in wt])),
+            "assumed_orientation_vs_ground": mean_rel.get(0),
+        }, 4)
 
     # Data quality overview
     d_all = tables["drivers"]

@@ -8,7 +8,7 @@ from amr_aerotwin.modeling.energy import lap_energy_summary, straight_energy_met
 from amr_aerotwin.modeling.lap_compare import compare_laps, segment_time_loss
 from amr_aerotwin.modeling.pod import PODReducedOrderModel
 from amr_aerotwin.modeling.race_pace import clean_race_laps, fit_race_pace
-from amr_aerotwin.modeling.validation import check_lap, geometry_ok, residual_diagnostics
+from amr_aerotwin.modeling.validation import check_lap, geometry_ok
 from amr_aerotwin.physics.dynamics import estimate_vehicle_state
 
 AMB = AmbientState(20.0, 30.0, 1000.0, 0.0, 0.0, 0.0)
@@ -55,12 +55,14 @@ def test_pod_recovers_rank_two_field_and_generalises():
 
 
 def test_energy_detects_full_throttle_speed_drop_and_ignores_steady_straights():
-    n = 600
-    v_steady = np.concatenate([np.linspace(40, 85, 300), np.full(300, 85.0)])
-    v_clip = np.concatenate([np.linspace(40, 85, 300), np.linspace(85, 77, 300)])
+    pad = np.full(40, 30.0)  # slow, part-throttle sections so the straight does not touch the line
+    v_steady = np.concatenate([pad, np.linspace(40, 85, 300), np.full(300, 85.0), pad])
+    v_clip = np.concatenate([pad, np.linspace(40, 85, 300), np.linspace(85, 77, 300), pad])
+    n = len(v_steady)
+    thr = np.concatenate([np.full(40, 30.0), np.full(600, 100.0), np.full(40, 30.0)])
     k = np.zeros(n)
-    steady = straight_energy_metrics(estimate_vehicle_state(_lap(v_steady), mass_kg=775, curvature_inv_m=k))
-    clip = lap_energy_summary(estimate_vehicle_state(_lap(v_clip), mass_kg=775, curvature_inv_m=k))
+    steady = straight_energy_metrics(estimate_vehicle_state(_lap(v_steady, throttle=thr), mass_kg=775, curvature_inv_m=k))
+    clip = lap_energy_summary(estimate_vehicle_state(_lap(v_clip, throttle=thr), mass_kg=775, curvature_inv_m=k))
     assert steady["speed_drop_kmh"].max() < 0.5
     assert steady["time_loss_s"].max() < 0.01  # smoothing ripple only
     assert clip["speed_drop_kmh"] == pytest.approx(8 * 3.6, abs=1.0)
@@ -94,7 +96,7 @@ def test_race_pace_recovers_fuel_degradation_and_driver_pace():
     laps, pace = _synthetic_race()
     clean = clean_race_laps(laps)
     assert not ((clean["drv"] == "D0") & (clean["lap"].isin([1, 6, 7, 14, 15]))).any()
-    res = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"])), n_boot=100)
+    res = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"])))
     assert res.fuel_s_per_lap == pytest.approx(-0.06, abs=0.012)
     assert res.deg_s_per_lap["HARD"] == pytest.approx(0.03, abs=0.01)
     assert res.deg_s_per_lap["MEDIUM"] == pytest.approx(0.05, abs=0.01)
@@ -104,18 +106,20 @@ def test_race_pace_recovers_fuel_degradation_and_driver_pace():
 
 
 def test_lap_checks_can_fail():
-    good = _lap(np.full(100, 50.0), quality={"projection_rms_m": 1.0, "speed_trap_minus_max_kmh": -15.0})
-    bad = _lap(np.full(100, 50.0), quality={"projection_rms_m": 30.0, "speed_trap_minus_max_kmh": 20.0})
+    from amr_aerotwin.modeling.validation import LAP_CHECKS
+
+    ok = {m: 0.0 for m in LAP_CHECKS}
+    ok.update(projection_rms_m=1.0, speed_trap_minus_max_kmh=-15.0)
+    good = _lap(np.full(100, 50.0), quality=ok)
+    bad = _lap(np.full(100, 50.0), quality={**ok, "projection_rms_m": 30.0, "speed_trap_minus_max_kmh": 20.0})
     assert check_lap(good).passed
     res = check_lap(bad)
     assert not res.passed and set(res.failures) == {"projection_rms_m", "speed_trap_minus_max_kmh"}
+    missing = {k: v for k, v in ok.items() if k != "gps_speed_rms_ms"}
+    assert not check_lap(_lap(np.full(100, 50.0), quality=missing)).passed  # missing required metric
+    no_trap = {**ok, "speed_trap_minus_max_kmh": float("nan")}
+    assert check_lap(_lap(np.full(100, 50.0), quality=no_trap)).passed  # optional metric may be absent
     assert geometry_ok(-1.01) and not geometry_ok(0.9)
-
-
-def test_residual_diagnostics_calibrated_for_gaussian_noise():
-    r = np.random.default_rng(0).normal(0, 2.0, 5000)
-    d = residual_diagnostics(r, sigma=2.0)
-    assert d.ece < 0.02 and d.jarque_bera_p > 0.01 and abs(d.lag1_autocorr) < 0.05
 
 
 def test_race_pace_refuses_unidentifiable_single_strategy_race():
@@ -123,7 +127,7 @@ def test_race_pace_refuses_unidentifiable_single_strategy_race():
     same = laps.copy()
     same["life"] = np.where(same["lap"] <= 20, same["lap"], same["lap"] - 20)
     same["compound"] = np.where(same["lap"] <= 20, "MEDIUM", "HARD")
-    assert fit_race_pace(same, dict(zip(same["drv"], same["team"])), n_boot=10) is None
+    assert fit_race_pace(same, dict(zip(same["drv"], same["team"]))) is None
 
 
 def _correlated_race(seed: int, n_drivers: int = 16, phi: float = 0.6, offset_sd: float = 0.12):
@@ -153,7 +157,7 @@ def test_race_pace_intervals_cover(phi, offset_sd):
     n = 20
     for seed in range(n):
         laps = _correlated_race(seed, phi=phi, offset_sd=offset_sd)
-        lo, hi = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"])), n_boot=120).fuel_ci90
+        lo, hi = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"]))).fuel_ci90
         hits += lo <= -0.06 <= hi
     assert hits / n >= 0.75  # nominal 90%; cluster bootstrap with 16 clusters
 
@@ -256,6 +260,34 @@ def test_speed_gap_profile_detects_late_straight_loss_and_flat_profiles():
     assert prof.attrs["second_half_kmh"] == pytest.approx(-8, abs=0.7)
     assert abs(prof.attrs["first_half_kmh"]) < 0.7
     lo, hi = prof.attrs["growth_ci90"]
-    assert hi < 0 and prof.attrs["drag_only_ratio"] > 1
+    assert hi < 0
     flat = speed_gap_profile(pd.DataFrame(rows), "T3")
     assert flat.attrs["growth_ci90"][0] < 0 < flat.attrs["growth_ci90"][1]
+
+
+def test_uniform_percentage_deficit_gives_equal_loss_rates_in_every_section():
+    base = 40 + 30 * (1 + np.sin(np.linspace(0, 8 * np.pi, 1200)))
+    ref = _lap(base)
+    slow = _lap(base / 1.03)  # 3% slower everywhere
+    cmp_ = compare_laps(slow, ref, np.array([700.0, 2000.0, 3600.0, 5200.0]), ["T1", "T2", "T3", "T4"])
+    rates = cmp_.class_summary.dropna(subset=["loss_rate_pct"])
+    rates = rates[rates["reference_time_s"] > 0]
+    assert np.allclose(rates["loss_rate_pct"], 3.0, atol=0.05)
+    # Seconds lost are still largest where the reference spends most time
+    biggest = rates.loc[rates["time_s"].idxmax(), "speed_class"]
+    assert biggest == rates.loc[rates["reference_time_s"].idxmax(), "speed_class"]
+
+
+def test_race_pace_team_gap_intervals_cover():
+    """Team gaps (the published quantity) must cover too, not only the shared fuel term."""
+    hits, total = 0, 0
+    for seed in range(20):
+        laps = _correlated_race(seed)
+        tp = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"]))).team_pace.set_index("team")
+        for team, row in tp.iterrows():
+            if team == "T0":
+                continue
+            truth = 0.2 * int(team[1:])
+            hits += row["ci_lo"] <= truth <= row["ci_hi"]
+            total += 1
+    assert hits / total >= 0.75

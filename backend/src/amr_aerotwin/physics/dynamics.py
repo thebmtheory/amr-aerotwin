@@ -71,14 +71,15 @@ class VehicleState:
 
 
 def smooth_speed(speed_ms: NDArray[np.float64], step_m: float, window_m: float = 25.0) -> NDArray[np.float64]:
+    """Savitzky-Golay smoothing of speed. Not periodic: a qualifying lap starts at the end of
+    the out-lap, so speed at the start line can differ from speed at the finish by 15+ km/h."""
     w = max(5, int(round(window_m / step_m)) | 1)
-    return savgol_filter(speed_ms, w, 2, mode="wrap")
+    return savgol_filter(speed_ms, w, 2, mode="interp")
 
 
 def longitudinal_acceleration(speed_ms: NDArray[np.float64], step_m: float) -> NDArray[np.float64]:
-    """a_x = v dv/ds on a closed lap (periodic central difference)."""
-    dv_ds = (np.roll(speed_ms, -1) - np.roll(speed_ms, 1)) / (2.0 * step_m)
-    return speed_ms * dv_ds
+    """a_x = v dv/ds (one-sided differences at the lap ends, never wrapped across the line)."""
+    return speed_ms * np.gradient(speed_ms, step_m)
 
 
 def track_grade(z_m: NDArray[np.float64], step_m: float, window_m: float = 150.0) -> NDArray[np.float64]:
@@ -160,7 +161,11 @@ def estimate_vehicle_state(
     grade = track_grade(lap.z_m, step) if len(lap.z_m) == len(v) else np.zeros_like(v)
 
     wind = decompose_aero_wind_vectors(v, heading, lap.ambient)
-    q = 0.5 * rho * wind["v_airspeed_ms"] ** 2
+    # Dynamic pressure uses ground speed. The wind components above assume the timing X/Y
+    # frame points East/North, which is unverified: an empirical rotation test (see
+    # powertrain.wind_rotation_test) does not recover that orientation, so wind is kept
+    # for reference only and never enters q.
+    q = 0.5 * rho * v**2
 
     return VehicleState(
         lap=lap,
