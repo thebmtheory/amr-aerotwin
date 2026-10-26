@@ -36,7 +36,7 @@ class RacePaceResult:
     deg_s_per_lap: dict[str, float]
     deg_ci90: dict[str, tuple[float, float]]
     reference_compound: str
-    driver_pace: pd.DataFrame  # driver, team, pace_s, ci_lo, ci_hi, n_laps
+    driver_pace: pd.DataFrame  # driver, team, pace_s, ci_lo, ci_hi, n_laps, gap_s, gap_lo, gap_hi (to the fastest team)
     team_pace: pd.DataFrame  # team, pace_s, gap_s, ci_lo, ci_hi (gap to fastest team)
     n_laps: int
     residual_sd_s: float
@@ -166,6 +166,16 @@ def fit_race_pace(
         return float(gap - z90 * sd), float(gap + z90 * sd)
 
     cis = {t: gap_ci(t) for t in teams}
+
+    # Each driver's gap to the fastest team, with the same delete-one-stint jackknife
+    def driver_gap_ci(x: str) -> tuple[float, float]:
+        sd = jk_sd(jk[f"alpha:{x}"].to_numpy() - best_jk)
+        gap = float(coef[f"alpha:{x}"] - best)
+        return float(gap - z90 * sd), float(gap + z90 * sd)
+
+    dp["gap_s"] = dp["pace_s"] - best
+    dgap = [driver_gap_ci(x) for x in dp["driver"]]
+    dp["gap_lo"], dp["gap_hi"] = [g[0] for g in dgap], [g[1] for g in dgap]
     tp = pd.DataFrame(
         {
             "team": teams,

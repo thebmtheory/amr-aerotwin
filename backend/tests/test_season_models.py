@@ -221,3 +221,21 @@ def test_effective_drag_is_recovered_from_a_top_speed_gap():
     v1 = _straight_peaks_kmh(simulate_lap(s, k, _with_drag(base, 0.25), None, length).speed_ms, k, 5.0)
     assert v1 < v0
     assert match_drag_to_top_speed(base, s, k, None, length, v1 - v0) == pytest.approx(0.25, abs=0.01)
+
+
+def test_straight_vs_field_compares_every_team_on_the_targets_tracks():
+    from amr_aerotwin.pipeline.season import straight_vs_field
+
+    rows = []
+    # Six events; the target has no passing lap at the last two, where the rival loses a lot.
+    # Summed over the rival's own events its rate would be 2.8%; on the target's four, 2%.
+    for rnd in range(1, 7):
+        for team, loss in (("AMR", 0.4 if rnd <= 4 else None), ("RIV", 0.2 if rnd <= 4 else 0.6), ("OTH", 0.1)):
+            if loss is not None:
+                rows.append({"season": 2026, "round": rnd, "team": team, "section": "straights", "loss_s": loss, "reference_time_s": 10.0})
+    out = straight_vs_field(pd.DataFrame(rows), "AMR", ["RIV", "OTH"], n_boot=400, seed=3, season=2026)
+    assert out["n_events"] == 4 and out["next_team"] == "RIV"
+    assert out["next_rate_pct"] == pytest.approx(2.0) and out["target_rate_pct"] == pytest.approx(4.0)
+    assert out["ratio"] == pytest.approx(2.0)
+    # Paired draws of identical events: every draw gives the same ratio
+    assert out["ratio_ci90"][0] == pytest.approx(2.0) and out["ratio_ci90"][1] == pytest.approx(2.0)

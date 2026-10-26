@@ -42,20 +42,22 @@ def test_site_builds_with_strict_json(tmp_path):
     (proc / "season.json").write_text(json.dumps({"n_events": 1, "powertrain": {}, "value": float("nan")}))
     (proc / "events" / "2025-test.json").write_text(json.dumps({"season": 2025, "round": 1, "event": "Test Grand Prix",
                                                                   "geometry_ok": True, "circuit": {"location": "X"}}))
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    (reports / "test-grand-prix.html").write_text("<!doctype html><title>Aston Martin at Testville</title><p>x</p>")
-    site = build_site(proc, tmp_path / "site", reports)
-    for name in ("index.html", "page.html", "app.js", "app.css", "lapsim.js", "data/season.js", "data/events/2025-test.js",
-                 "reports/test-grand-prix.html"):
+    site = build_site(proc, tmp_path / "site")
+    for name in ("index.html", "page.html", "app.js", "app.css", "lapsim.js", "trackmath.js", "data/season.js", "data/events/2025-test.js"):
         assert (site / name).exists(), name
-    for page in ("index.html", "page.html"):  # the event report is linked from the season site's nav
+    for page in ("index.html", "page.html"):  # one report: the filter bar and the per-track data it reads
         html = (site / page).read_text()
-        assert '<a href="reports/test-grand-prix.html" class="nav-report">Testville report</a>' in html and "<!--EVENT_REPORTS-->" not in html
-    assert not (site / "event_report.html").exists()
+        assert all(f'id="{i}"' in html for i in ("f-season", "f-drivers", "f-tracks", "tracks", "detail"))
+        assert 'src="data/explorer/index.js"' in html and "reports/" not in html
     text = (site / "data" / "season.js").read_text()
     assert "NaN" not in text and "window.SEASON=" in text and "window.MANIFEST=" in text
     assert "<!doctype html>" in (site / "index.html").read_text().lower()
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_page_script_parses():
+    app = JS.parent / "app.js"
+    subprocess.run(["node", "--check", str(app)], check=True, capture_output=True)
 
 
 def test_readme_blocks_are_generated_from_results(tmp_path):

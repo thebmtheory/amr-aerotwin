@@ -281,6 +281,17 @@ def test_uniform_percentage_deficit_gives_equal_loss_rates_in_every_section():
     assert biggest == rates.loc[rates["reference_time_s"].idxmax(), "speed_class"]
 
 
+def test_race_pace_driver_gaps_are_consistent_with_team_gaps():
+    laps = _correlated_race(3)
+    r = fit_race_pace(laps, dict(zip(laps["drv"], laps["team"])))
+    dp, tp = r.driver_pace.set_index("driver"), r.team_pace.set_index("team")
+    for team, row in tp.iterrows():
+        mine = dp[dp["team"] == team]
+        assert row["gap_s"] == pytest.approx(mine["gap_s"].min(), abs=1e-9)  # team = its faster driver
+    assert (dp["gap_lo"] <= dp["gap_s"]).all() and (dp["gap_s"] <= dp["gap_hi"]).all()
+    assert dp["gap_s"].min() == pytest.approx(0.0, abs=1e-9)
+
+
 def test_race_pace_team_gap_intervals_cover():
     """Team gaps (the published quantity) must cover too, not only the shared fuel term."""
     hits, total = 0, 0

@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 export PYTHONPATH := backend/src
 
-.PHONY: install test lint fetch build analyse report all serve event-report figures
+.PHONY: install test lint fetch build analyse report all serve figures
 
 install:
 	python3 -m venv .venv && $(PY) -m pip install -e ".[dev]"
@@ -27,10 +27,6 @@ report:
 
 all:
 	$(PY) -m amr_aerotwin.cli all
-
-EVENT ?= British Grand Prix
-event-report:
-	$(PY) -m amr_aerotwin.cli event-report --event "$(EVENT)"
 
 serve:
 	$(PY) -m http.server 8765 --directory site

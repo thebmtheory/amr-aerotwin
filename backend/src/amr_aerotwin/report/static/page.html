@@ -1,5 +1,5 @@
 <title>Where Aston Martin Loses Time</title>
-<meta name="description" content="Physics-based analysis of public F1 timing data: where the Aston Martin loses lap time in 2025 and 2026, and why.">
+<meta name="description" content="Physics-based analysis of public F1 timing data: where the Aston Martin loses lap time in 2025 and 2026, track by track and driver by driver.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -10,16 +10,27 @@
     <a class="brand" href="#top">Track Science</a>
     <nav class="nav" aria-label="Sections">
       <a href="#finding">Finding</a>
-      <a href="#upgrades">Upgrades</a>
-      <a href="#aero">Aero map</a>
-      <a href="#lap">Lap explorer</a>
+      <a href="#tracks">Tracks</a>
+      <a href="#detail">Track detail</a>
       <a href="#sim">Lap sim</a>
       <a href="#energy">Energy</a>
       <a href="#race">Race pace</a>
+      <a href="#upgrades">Upgrades</a>
+      <a href="#aero">Aero map</a>
       <a href="#models">Models</a>
       <a href="#method">Method</a>
-      <!--EVENT_REPORTS-->
     </nav>
+  </div>
+  <div class="filterbar">
+    <div class="wrap filters" role="group" aria-label="Filters for the report">
+      <div class="f-item">
+        <span class="f-label" id="lbl-season">Season</span>
+        <div class="seg" id="f-season" role="group" aria-labelledby="lbl-season"></div>
+      </div>
+      <div class="f-item ms" id="f-drivers"></div>
+      <div class="f-item ms" id="f-tracks"></div>
+      <p class="f-status" id="f-status" aria-live="polite"></p>
+    </div>
   </div>
 </header>
 
@@ -30,15 +41,15 @@
     <p class="lede" data-fill="hero_lede"></p>
     <div class="tiles" id="tiles"></div>
     <p class="note" data-fill="hero_note"></p>
+    <p class="note how">Use the bar at the top to pick the season, the Aston Martin drivers and the tracks. Every section says which of those choices it follows.</p>
   </section>
 
   <section id="finding" class="band">
     <div class="wrap">
-      <h2>Where the gap comes from</h2>
+      <div class="sec-head"><h2>Where the gap comes from</h2><p class="scope" data-scope="finding"></p></div>
       <div class="grid2">
         <figure class="fig">
-          <figcaption><strong>Loss rate to pole: corners vs straights, every team</strong> <span>% of the pole lap's time in each, summed over events · bars = 90% interval</span></figcaption>
-          <div class="seg" id="seg-rates"></div>
+          <figcaption><strong>Loss rate to pole: corners vs straights, every team</strong> <span data-fill="rates_sub"></span></figcaption>
           <div id="ch-rates" class="chart square" role="img" aria-label="Corner vs straight loss rates by team"></div>
         </figure>
         <div class="prose">
@@ -68,191 +79,254 @@
     </div>
   </section>
 
-  <section id="upgrades" class="wrap section">
-    <h2>What the upgrades changed</h2>
-    <div class="prose">
-      <p data-fill="upgrade_text"></p>
+  <section id="tracks" class="wrap section">
+    <div class="sec-head"><h2>Track by track</h2><p class="scope" data-scope="tracks"></p></div>
+    <div class="prose"><p data-fill="tracks_text"></p></div>
+    <div class="tiles" id="trk-tiles"></div>
+    <figure class="fig wide">
+      <figcaption><strong>Qualifying gap to the fastest lap, by track</strong> <span>% · each driver’s fastest lap · grey band = middle half of the other teams</span></figcaption>
+      <div id="ch-trk-gap" class="chart" role="img" aria-label="Qualifying gap of each Aston Martin driver at each selected track"></div>
+    </figure>
+    <div class="grid2">
+      <figure class="fig">
+        <figcaption><strong>Loss rate on straights vs corners, selected tracks</strong> <span>% of the reference lap’s time in each, every team summed over the selected tracks where the Aston Martin lap passed the data checks · point estimates</span></figcaption>
+        <div id="ch-trk-rates" class="chart square" role="img" aria-label="Straight and corner loss rates over the selected tracks"></div>
+      </figure>
+      <figure class="fig">
+        <figcaption><strong>Loss rate by section and track</strong> <span>% of the reference lap’s time in that section · red = lost, blue = gained · blank = no lap that passed the data checks</span></figcaption>
+        <div id="ch-trk-heat" class="chart square" role="img" aria-label="Heatmap of loss rate by section and track"></div>
+      </figure>
     </div>
     <div class="grid2">
       <figure class="fig">
-        <figcaption><strong>Fast-corner grip vs field median</strong> <span>2026 · ratio · upgrade events marked</span></figcaption>
-        <div id="ch-grip26" class="chart" role="img" aria-label="Fast corner grip ratio over 2026"></div>
+        <figcaption><strong>Corner minimum speed vs the other teams</strong> <span>km/h · mean over corners where the speed channel agrees with GPS</span></figcaption>
+        <div id="ch-trk-corners" class="chart short" role="img" aria-label="Corner minimum speed against the other teams by corner class"></div>
       </figure>
       <figure class="fig">
-        <figcaption><strong>Peak speed on the main straights vs field median</strong> <span>2026 · km/h</span></figcaption>
-        <div id="ch-straight26" class="chart" role="img" aria-label="Straight-line speed delta over 2026"></div>
+        <figcaption><strong>Speed on the straights vs the other teams</strong> <span>km/h · mean over the reference lap’s straights</span></figcaption>
+        <div id="ch-trk-straights" class="chart short" role="img" aria-label="Straight-line speeds against the other teams"></div>
       </figure>
     </div>
-    <div class="grid2">
-      <figure class="fig">
-        <figcaption><strong>Qualifying gap to the fastest lap</strong> <span>team best · % · grey band = middle half of the field</span></figcaption>
-        <div class="seg" role="tablist" id="seg-season"></div>
-        <div id="ch-gap" class="chart" role="img" aria-label="Qualifying gap over the season"></div>
-      </figure>
-      <figure class="fig">
-        <figcaption><strong>Where did the pace change?</strong> <span>Bayesian changepoint, posterior probability per event</span></figcaption>
-        <div id="ch-cp" class="chart" role="img" aria-label="Changepoint posterior"></div>
-      </figure>
-    </div>
-    <div class="table-wrap">
-      <table class="data" id="tbl-did"><caption>Declared upgrades: difference-in-differences, 4 events either side. A placebo p cannot go below 1 / (1 + number of placebos): about 0.09–0.11 here.</caption></table>
-    </div>
+    <div class="table-wrap"><table class="data clickable" id="tbl-tracks"></table></div>
   </section>
 
-  <section id="aero" class="band">
+  <section id="detail" class="band">
     <div class="wrap">
-      <h2>Aero map: downforce and drag against the field</h2>
-      <div class="prose"><p data-fill="aero_text"></p></div>
-      <div class="seg" role="tablist" id="seg-aero"></div>
+      <div class="sec-head"><h2>Track detail</h2><p class="scope" data-scope="detail"></p></div>
+      <div class="controls">
+        <label for="sel-track">Track</label>
+        <select id="sel-track"></select>
+        <span class="hint" id="trk-hint"></span>
+      </div>
+      <div class="prose"><p data-fill="detail_text"></p></div>
+      <div class="tiles" id="det-tiles"></div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Qualifying order</strong> <span>each team’s fastest lap · gap to the fastest lap, s</span></figcaption>
+          <div id="ch-order" class="chart tall" role="img" aria-label="Gap to the fastest lap for every team"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Where the gap to the team ahead is</strong> <span id="rival-sub"></span></figcaption>
+          <div id="ch-rival" class="chart tall" role="img" aria-label="Section by section difference to the team directly ahead"></div>
+        </figure>
+      </div>
       <figure class="fig wide">
-        <figcaption><strong>Downforce-equivalent vs drag-equivalent, relative to the field median</strong> <span>% · lines = equal lap-time cost from the calibrated lap sim (season average)</span></figcaption>
-        <div id="ch-aero" class="chart square" role="img" aria-label="Aero map scatter"></div>
+        <figcaption><strong>Speed and cumulative gap to the reference lap</strong> <span id="speed-sub"></span></figcaption>
+        <div id="ch-speed" class="chart tall" role="img" aria-label="Speed traces"></div>
+        <div id="ch-delta" class="chart short" role="img" aria-label="Cumulative gap to the reference lap"></div>
       </figure>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Where the time goes</strong> <span id="map-sub"></span></figcaption>
+          <div class="seg" id="seg-map" role="group" aria-label="Driver shown on the map"></div>
+          <div id="ch-map" class="chart square" role="img" aria-label="Track map coloured by time lost"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Loss rate on straights vs corners at this track</strong> <span>every team’s fastest passing lap · % of the reference lap’s time in each</span></figcaption>
+          <div id="ch-det-rates" class="chart square" role="img" aria-label="Loss rates of every team at this track"></div>
+        </figure>
+      </div>
       <figure class="fig wide">
-        <figcaption><strong>What 1% is worth at each circuit</strong> <span>lap-time change, s, for +1% downforce and +1% drag (calibrated lap sim)</span></figcaption>
-        <div id="ch-sens" class="chart tall" role="img" aria-label="Sensitivity by circuit"></div>
+        <figcaption><strong>Time lost per corner</strong> <span>s vs the reference lap, from 120 m before to 120 m after each corner</span></figcaption>
+        <div id="ch-corners" class="chart" role="img" aria-label="Time lost at each corner"></div>
+        <div class="table-wrap compact"><table class="data" id="tbl-corners"></table></div>
       </figure>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Speed along the straight</strong> <span id="straight-sub"></span></figcaption>
+          <div class="seg" id="seg-straight" role="group" aria-label="Straight shown"></div>
+          <div id="ch-straight" class="chart" role="img" aria-label="Speed along the selected straight"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Speed lost at full throttle</strong> <span>km/h below the running peak while flat out · grey = other teams</span></figcaption>
+          <div id="ch-ftl" class="chart" role="img" aria-label="Speed lost at full throttle on each straight"></div>
+        </figure>
+      </div>
+      <figure class="fig wide" id="det-race-fig">
+        <figcaption><strong>Race pace at this track</strong> <span>gap to the fastest team, s per lap, corrected for fuel and tyres · 90% interval</span></figcaption>
+        <div id="ch-det-race" class="chart" role="img" aria-label="Race pace gap per team at this track"></div>
+      </figure>
+      <ul class="note notes" id="det-notes"></ul>
     </div>
   </section>
 
-  <section id="lap" class="wrap section">
-    <h2>Lap explorer</h2>
-    <div class="controls">
-      <label for="sel-event">Event</label>
-      <select id="sel-event"></select>
-      <span class="hint" id="lap-hint"></span>
+  <section id="sim" class="wrap section">
+    <div class="sec-head"><h2>Lap simulator, calibrated to the real lap</h2><p class="scope" data-scope="sim"></p></div>
+    <div class="prose">
+      <p>A quasi-steady point-mass simulator (grip <span class="eq">μ(g + qC<sub>L</sub>A/m)</span> on a friction ellipse, a power limit and drag) is fitted to the measured speed trace by maximum a posteriori estimation. Uncertainty comes from a Laplace approximation, cross-checked with a Metropolis sampler, with the residual autocorrelation turned into an effective sample size. A Gaussian process on the remaining error then shows where point-mass physics is wrong.</p>
     </div>
     <div class="grid2">
       <figure class="fig">
-        <figcaption><strong>Where the time goes</strong> <span id="map-sub">time lost per 10 m vs pole</span></figcaption>
-        <div id="ch-map" class="chart square" role="img" aria-label="Track map coloured by time lost"></div>
+        <figcaption><strong>Measured vs simulated speed</strong> <span id="sim-sub"></span></figcaption>
+        <div id="ch-sim" class="chart" role="img" aria-label="Simulated vs measured speed"></div>
       </figure>
       <figure class="fig">
-        <figcaption><strong>Time by corner type</strong> <span>seconds lost to pole (+) or gained (−)</span></figcaption>
-        <div id="ch-class" class="chart" role="img" aria-label="Time lost by corner class"></div>
-        <div class="table-wrap compact"><table class="data" id="tbl-corners"></table></div>
+        <figcaption><strong>Model discrepancy</strong> <span>GP mean ± 2σ, km/h (measured − simulated)</span></figcaption>
+        <div id="ch-disc" class="chart" role="img" aria-label="Discrepancy GP"></div>
       </figure>
     </div>
     <figure class="fig wide">
-      <figcaption><strong>Speed and cumulative gap</strong> <span>Aston Martin vs pole on a shared distance grid</span></figcaption>
-      <div id="ch-speed" class="chart tall" role="img" aria-label="Speed traces"></div>
-      <div id="ch-delta" class="chart short" role="img" aria-label="Cumulative delta"></div>
+      <figcaption><strong>Calibration accuracy across events</strong> <span>pole lap · simulated minus actual lap time · bars = 90% posterior interval</span></figcaption>
+      <div id="ch-calacc" class="chart" role="img" aria-label="Calibration lap time error by event"></div>
+    </figure>
+    <p class="caption" data-fill="calacc_text"></p>
+    <div class="grid2">
+      <div class="table-wrap"><table class="data" id="tbl-params"></table></div>
+      <div class="sandbox" id="sandbox">
+        <h3>Setup sandbox</h3>
+        <p class="hint">Runs the same simulator in your browser on this circuit, starting from the calibrated Aston Martin.</p>
+        <div class="sliders">
+          <label>Downforce C<sub>L</sub>A <output id="o-cla">0%</output><input id="s-cla" type="range" min="-10" max="10" step="0.5" value="0"></label>
+          <label>Drag C<sub>D</sub>A <output id="o-cda">0%</output><input id="s-cda" type="range" min="-10" max="10" step="0.5" value="0"></label>
+          <label>Wheel power <output id="o-pow">0 kW</output><input id="s-pow" type="range" min="-60" max="60" step="2" value="0"></label>
+          <label>Mass <output id="o-mass">0 kg</output><input id="s-mass" type="range" min="-10" max="10" step="1" value="0"></label>
+        </div>
+        <p class="readout"><span id="sb-time">–</span><span id="sb-delta"></span></p>
+        <button type="button" id="sb-reset" class="btn">Reset</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="energy" class="band">
+    <div class="wrap">
+      <div class="sec-head"><h2>2026 energy: losing speed at full throttle</h2><p class="scope" data-scope="energy"></p></div>
+      <div class="prose"><p data-fill="energy_text"></p></div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Speed on the straights</strong> <span id="energy-sub">selected track</span></figcaption>
+          <div id="ch-energy" class="chart" role="img" aria-label="Speed along straights"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Time lost against holding peak speed</strong> <span>s per lap, mean over events</span></figcaption>
+          <div id="ch-clip" class="chart" role="img" aria-label="Clipping time loss by team"></div>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="race" class="wrap section">
+    <div class="sec-head"><h2>Race pace, corrected for fuel and tyres</h2><p class="scope" data-scope="race"></p></div>
+    <div class="prose"><p data-fill="race_text"></p></div>
+    <figure class="fig wide">
+      <figcaption><strong>Corrected race-pace gap to the best team, and the qualifying gap</strong> <span>s per lap · each selected driver · 90% interval</span></figcaption>
+      <div id="ch-race" class="chart tall" role="img" aria-label="Race pace of each Aston Martin driver by track"></div>
     </figure>
   </section>
 
-  <section id="sim" class="band">
+  <section id="upgrades" class="band">
     <div class="wrap">
-      <h2>Lap simulator, calibrated to the real lap</h2>
+      <div class="sec-head"><h2>What the upgrades changed</h2><p class="scope" data-scope="upgrades"></p></div>
       <div class="prose">
-        <p>A quasi-steady point-mass simulator (grip <span class="eq">μ(g + qC<sub>L</sub>A/m)</span> on a friction ellipse, a power limit and drag) is fitted to the measured speed trace by maximum a posteriori estimation. Uncertainty comes from a Laplace approximation, cross-checked with a Metropolis sampler, with the residual autocorrelation turned into an effective sample size. A Gaussian process on the remaining error then shows where point-mass physics is wrong.</p>
+        <p data-fill="upgrade_text"></p>
       </div>
       <div class="grid2">
         <figure class="fig">
-          <figcaption><strong>Measured vs simulated speed</strong> <span id="sim-sub"></span></figcaption>
-          <div id="ch-sim" class="chart" role="img" aria-label="Simulated vs measured speed"></div>
+          <figcaption><strong>Fast-corner grip vs field median</strong> <span data-fill="season_upg_sub"></span></figcaption>
+          <div id="ch-grip26" class="chart" role="img" aria-label="Fast corner grip ratio over the season"></div>
         </figure>
         <figure class="fig">
-          <figcaption><strong>Model discrepancy</strong> <span>GP mean ± 2σ, km/h (measured − simulated)</span></figcaption>
-          <div id="ch-disc" class="chart" role="img" aria-label="Discrepancy GP"></div>
+          <figcaption><strong>Peak speed on the main straights vs field median</strong> <span data-fill="season_kmh_sub"></span></figcaption>
+          <div id="ch-straight26" class="chart" role="img" aria-label="Straight-line speed difference over the season"></div>
         </figure>
       </div>
-      <figure class="fig wide">
-        <figcaption><strong>Calibration accuracy across events</strong> <span>pole lap · simulated minus actual lap time · bars = 90% posterior interval</span></figcaption>
-        <div id="ch-calacc" class="chart" role="img" aria-label="Calibration lap time error by event"></div>
-      </figure>
-      <p class="caption" data-fill="calacc_text"></p>
       <div class="grid2">
-        <div class="table-wrap"><table class="data" id="tbl-params"></table></div>
-        <div class="sandbox" id="sandbox">
-          <h3>Setup sandbox</h3>
-          <p class="hint">Runs the same simulator in your browser on this circuit, starting from the calibrated Aston Martin.</p>
-          <div class="sliders">
-            <label>Downforce C<sub>L</sub>A <output id="o-cla">0%</output><input id="s-cla" type="range" min="-10" max="10" step="0.5" value="0"></label>
-            <label>Drag C<sub>D</sub>A <output id="o-cda">0%</output><input id="s-cda" type="range" min="-10" max="10" step="0.5" value="0"></label>
-            <label>Wheel power <output id="o-pow">0 kW</output><input id="s-pow" type="range" min="-60" max="60" step="2" value="0"></label>
-            <label>Mass <output id="o-mass">0 kg</output><input id="s-mass" type="range" min="-10" max="10" step="1" value="0"></label>
-          </div>
-          <p class="readout"><span id="sb-time">–</span><span id="sb-delta"></span></p>
-          <button type="button" id="sb-reset" class="btn">Reset</button>
-        </div>
+        <figure class="fig">
+          <figcaption><strong>Qualifying gap to the fastest lap</strong> <span>team best · % · grey band = middle half of the field</span></figcaption>
+          <div id="ch-gap" class="chart" role="img" aria-label="Qualifying gap over the season"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Where did the pace change?</strong> <span>Bayesian changepoint, posterior probability per event</span></figcaption>
+          <div id="ch-cp" class="chart" role="img" aria-label="Changepoint posterior"></div>
+        </figure>
+      </div>
+      <div class="table-wrap">
+        <table class="data" id="tbl-did"><caption>Declared upgrades: difference-in-differences, 4 events either side.</caption></table>
       </div>
     </div>
   </section>
 
-  <section id="energy" class="wrap section">
-    <h2>2026 energy: losing speed at full throttle</h2>
-    <div class="prose"><p data-fill="energy_text"></p></div>
-    <div class="grid2">
-      <figure class="fig">
-        <figcaption><strong>Speed on the straights</strong> <span id="energy-sub">selected event</span></figcaption>
-        <div id="ch-energy" class="chart" role="img" aria-label="Speed along straights"></div>
-      </figure>
-      <figure class="fig">
-        <figcaption><strong>Time lost against holding peak speed</strong> <span>s per lap, mean over events</span></figcaption>
-        <div id="ch-clip" class="chart" role="img" aria-label="Clipping time loss by team"></div>
-      </figure>
-    </div>
+  <section id="aero" class="wrap section">
+    <div class="sec-head"><h2>Aero map: downforce and drag against the field</h2><p class="scope" data-scope="aero"></p></div>
+    <div class="prose"><p data-fill="aero_text"></p></div>
+    <figure class="fig wide">
+      <figcaption><strong>Downforce-equivalent vs drag-equivalent, relative to the field median</strong> <span>% · lines = equal lap-time cost from the calibrated lap sim (season average)</span></figcaption>
+      <div id="ch-aero" class="chart square" role="img" aria-label="Aero map scatter"></div>
+    </figure>
+    <figure class="fig wide">
+      <figcaption><strong>What 1% is worth at each circuit</strong> <span>lap-time change, s, for +1% downforce and +1% drag (calibrated lap sim)</span></figcaption>
+      <div id="ch-sens" class="chart tall" role="img" aria-label="Sensitivity by circuit"></div>
+    </figure>
   </section>
 
-  <section id="race" class="band">
+  <section id="models" class="band">
     <div class="wrap">
-      <h2>Race pace, corrected for fuel and tyres</h2>
-      <div class="prose"><p data-fill="race_text"></p></div>
-      <figure class="fig wide">
-        <figcaption><strong>Aston Martin: corrected race-pace gap vs qualifying gap to the best team</strong> <span>s per lap · 90% interval</span></figcaption>
-        <div id="ch-race" class="chart tall" role="img" aria-label="Race pace over season"></div>
-      </figure>
-    </div>
-  </section>
-
-  <section id="models" class="wrap section">
-    <h2>Models and how they were tested</h2>
-    <div class="grid2">
-      <div>
-        <h3>Corner minimum-speed model</h3>
-        <p class="small" data-fill="corner_text"></p>
-        <div class="table-wrap"><table class="data" id="tbl-cm"></table></div>
-        <h3 class="subhead">Accounting for the gap with the lap simulator</h3>
-        <p class="small" data-fill="accounting_text"></p>
-      </div>
-      <figure class="fig">
-        <figcaption><strong>Corner minimum speed vs the other teams at the same corner</strong> <span>km/h by corner class · 90% interval over events</span></figcaption>
-        <div class="seg" role="tablist" id="seg-deficit"></div>
-        <div id="ch-deficit" class="chart" role="img" aria-label="Team corner deficit"></div>
-      </figure>
-    </div>
-    <div class="grid2">
-      <figure class="fig">
-        <figcaption><strong>How much is the car?</strong> <span>between-team share of qualifying-gap variance · 90% interval</span></figcaption>
-        <div id="ch-var" class="chart short" role="img" aria-label="Variance share"></div>
-        <p class="small" data-fill="var_text"></p>
-      </figure>
-      <figure class="fig">
-        <figcaption><strong>Can the wind correction be trusted?</strong> <span>fit residual vs ground speed when wind is rotated, mean over windy sessions</span></figcaption>
-        <div id="ch-wind" class="chart short" role="img" aria-label="Wind frame rotation test"></div>
-        <p class="small" data-fill="wind_text"></p>
-      </figure>
-    </div>
-  </section>
-
-  <section id="method" class="band">
-    <div class="wrap">
-      <h2>Method, data checks and limits</h2>
-      <div class="cols">
-        <div class="prose" data-fill="method_html"></div>
+      <div class="sec-head"><h2>Models and how they were tested</h2><p class="scope" data-scope="models"></p></div>
+      <div class="grid2">
         <div>
-          <h3>Data quality</h3>
-          <dl class="kv" id="dq"></dl>
-          <h3>Excluded events</h3>
-          <ul class="small" id="skipped"></ul>
+          <h3>Corner minimum-speed model</h3>
+          <p class="small" data-fill="corner_text"></p>
+          <div class="table-wrap"><table class="data" id="tbl-cm"></table></div>
+          <h3 class="subhead">Accounting for the gap with the lap simulator</h3>
+          <p class="small" data-fill="accounting_text"></p>
         </div>
+        <figure class="fig">
+          <figcaption><strong>Corner minimum speed vs the other teams at the same corner</strong> <span>km/h by corner class · 90% interval over events</span></figcaption>
+          <div id="ch-deficit" class="chart" role="img" aria-label="Team corner deficit"></div>
+        </figure>
       </div>
-      <p class="small foot">Data: the public <a href="https://github.com/TracingInsights" rel="noopener">TracingInsights</a> archive of F1 live timing. Regulation figures and upgrade lists: FIA Technical Regulations and FIA Car Presentation Submissions (links in the repository). This is an independent analysis and is not affiliated with Aston Martin Aramco F1 Team.</p>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>How much is the car?</strong> <span>between-team share of qualifying-gap variance · 90% interval</span></figcaption>
+          <div id="ch-var" class="chart short" role="img" aria-label="Variance share"></div>
+          <p class="small" data-fill="var_text"></p>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Can the wind correction be trusted?</strong> <span>fit residual vs ground speed when wind is rotated, mean over windy sessions</span></figcaption>
+          <div id="ch-wind" class="chart short" role="img" aria-label="Wind frame rotation test"></div>
+          <p class="small" data-fill="wind_text"></p>
+        </figure>
+      </div>
     </div>
+  </section>
+
+  <section id="method" class="wrap section">
+    <h2>Method, data checks and limits</h2>
+    <div class="cols">
+      <div class="prose" data-fill="method_html"></div>
+      <div>
+        <h3>Data quality</h3>
+        <dl class="kv" id="dq"></dl>
+        <h3>Excluded events</h3>
+        <ul class="small" id="skipped"></ul>
+      </div>
+    </div>
+    <p class="small foot">Data: the public <a href="https://github.com/TracingInsights" rel="noopener">TracingInsights</a> archive of F1 live timing. Regulation figures and upgrade lists: FIA Technical Regulations and FIA Car Presentation Submissions (links in the repository). This is an independent analysis and is not affiliated with Aston Martin Aramco F1 Team.</p>
   </section>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <script src="data/season.js"></script>
+<script src="data/explorer/index.js"></script>
 <script src="lapsim.js"></script>
+<script src="trackmath.js"></script>
 <script src="app.js"></script>

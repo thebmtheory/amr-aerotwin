@@ -5,14 +5,14 @@ time, why, and what each fix would be worth. It covers every Grand Prix of 2025 
 far whose archived telemetry is usable, with a calibrated lap simulator, statistical models
 validated out of sample, and an interactive report.
 
-**Read first:** the [technical note](docs/technical_note.md), regenerated from the results on every run, and the report site (`make report && make serve`, then open <http://localhost:8765>).
+**Read first:** the [technical note](docs/technical_note.md), regenerated from the results on every run, and the report (`make report && make serve`, then open <http://localhost:8765>).
 
-**Single-event report:** [Aston Martin at Silverstone](reports/british-grand-prix.html), every team at the 2025 and 2026 British Grands Prix: qualifying order, where the time goes by section and corner, the straights, grip vs straight-line speed, race pace and season context. `make event-report EVENT="British Grand Prix"` rebuilds it, or any other event.
+**The report** is one page. A bar at the top switches between the 2025 and 2026 seasons and has multi-select dropdowns for the Aston Martin drivers and the tracks. The season findings come first, then a track-by-track view of the selected tracks (qualifying gaps, loss rates against every team, corner and straight-line speeds, race pace) and a track detail for any one of them (qualifying order, where the gap to the team ahead is, speed traces, a track map of time lost, every corner and straight). Each section says which of the filters it follows.
 
 ## Main findings
 
 <!-- findings:start -->
-- **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent in each part of the lap, it loses 4.0% on the straights against at most 1.9% for any other team (Cadillac, 3.99% off pole over a lap against Aston Martin's 4.15%): 2.1 times as much, 90% interval 1.6 to 2.8. Every other team more than 1% off pole loses less per second on the straights than in the corners (ratios 0.27 to 0.68, against 0.94 for Aston Martin), as did Aston Martin in 2025 (0.19).
+- **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent in each part of the lap, it loses 4.0% on the straights. On the same 11 tracks no other team loses more than 2.0% (Cadillac, 3.99% off pole over a lap against Aston Martin's 4.15%): 2.0 times as much, 90% interval 1.7 to 2.5. Every other team more than 1% off pole loses less per second on the straights than in the corners (ratios 0.27 to 0.68, against 0.94 for Aston Martin), as did Aston Martin in 2025 (0.19).
 - **The straight-line loss starts at the corner exit and grows along the straight.** On the main straights the car starts 5.2 km/h down, where no other team is more than 4.0 km/h off the field, loses 2.8 km/h over the first half and 3.4 km/h more in the second half (90% interval 1.9 to 5.0), at full throttle, on 8 of 10 main straights at 7 events; the next largest late loss is McLaren's (2.0 km/h). Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.
 - **The teams decide the 2026 qualifying order:** between-team differences (car and driver line-up together) explain 90% (90% interval 83 to 94) of the variance in qualifying gaps, against 48% in 2025.
 - **What did not survive review is withdrawn, not hidden.** An early 36 kW power-deficit claim (an artefact of road gradient and unlike-for-like comparison), a "slow corners are the biggest loss" claim (cars simply spend most time there) and two wind claims (wind data proved uninformative) are documented as withdrawn in the technical note.
@@ -28,16 +28,16 @@ Exact figures and 90% intervals are in the technical note, which is generated fr
   </picture>
 </p>
 
-At Silverstone in 2026 the car was the slowest of the eleven teams, and more than half of its gap to Cadillac, the team directly ahead, was on the straights. On the Hangar Straight it lost more speed at full throttle than any other car ([event report](reports/british-grand-prix.html)):
+The track detail shows the same at a single circuit. Silverstone 2026, from the report: the section-by-section gap to the team ahead (left) and the speed each car lost at full throttle on each straight (right):
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/silverstone-gap-dark.png">
-    <img src="docs/img/silverstone-gap-light.png" width="420" alt="Waterfall of the time Aston Martin lost to Cadillac in 2026 Silverstone qualifying, by section: the straights are the largest part, followed by high-, medium- and low-speed corners">
+    <img src="docs/img/silverstone-gap-light.png" width="420" alt="Bar chart of the time Aston Martin lost to the team ahead in 2026 Silverstone qualifying, by section of the lap">
   </picture>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/silverstone-straights-dark.png">
-    <img src="docs/img/silverstone-straights-light.png" width="420" alt="Speed along the Hangar Straight at Silverstone 2026 for every team's best lap: Aston Martin is slowest and its speed falls in the second half, more than any other car's">
+    <img src="docs/img/silverstone-straights-light.png" width="420" alt="Speed lost at full throttle on the Wellington and Hangar Straights at Silverstone 2026: both Aston Martin drivers against each other team's fastest lap">
   </picture>
 </p>
 
@@ -56,8 +56,8 @@ At Silverstone in 2026 the car was the slowest of the eleven teams, and more tha
 | Race pace | `modeling/race_pace.py` | Fuel and tyre-degradation fixed effects; delete-one-stint jackknife intervals |
 | Season | `modeling/season.py` | Supertimes, car vs driver variance, Bayesian changepoints, upgrade difference-in-differences with placebo tests |
 | Energy | `modeling/energy.py` | 2026 full-throttle speed loss (clipping) |
-| Report | `report/` | Static site (Plotly) and a JavaScript port of the lap simulator for the in-browser setup sandbox |
-| Event report | `report/event_report.py` | One circuit, every team: section and corner times, corner speeds checked against GPS, full-throttle speed loss on the straights |
+| Report | `report/` | Static site (Plotly), a JavaScript port of the lap simulator for the in-browser setup sandbox, and the track views' arithmetic (`trackmath.js`), which the tests run against the season results |
+| Track views | `report/explorer.py` | Each Aston Martin driver's lap against the reference lap at every track: section, corner and straight-line losses stored as sums so the page combines any set of tracks exactly; corner speeds checked against GPS; full-throttle speed loss on the straights |
 
 ## Run it
 
@@ -77,7 +77,7 @@ make all
 make serve
 ```
 
-`make all` fetches about 40 events (around 130 MB, cached under `data/telemetry_cache`), processes them in parallel and runs the season analyses (two to three minutes on a laptop after the download). It then writes the report site (`site/`), the event reports (`reports/`), `docs/technical_note.md` and the findings in this README. After the first fetch everything runs offline, and two runs give identical results. The tests need no network: they use a small Silverstone 2025 fixture in `backend/tests/fixtures`. `make lint` runs ruff and mypy.
+`make all` fetches about 40 events (around 130 MB, cached under `data/telemetry_cache`), processes them in parallel and runs the season analyses (two to three minutes on a laptop after the download). It then writes the report (`site/`, with the per-track data under `site/data/explorer/`), `docs/technical_note.md` and the findings in this README. After the first fetch everything runs offline, and two runs give identical results. The tests need no network: they use a small Silverstone 2025 fixture in `backend/tests/fixtures`. `make lint` runs ruff and mypy.
 
 ## How it is tested
 
@@ -88,6 +88,7 @@ make serve
 - Leakage guards: the corner model's folds never split a circuit (so a 2025 and a 2026 race at the same track are never in different folds), and target speeds are never features.
 - Exact Shapley efficiency and placebo-test calibration under the null.
 - The JavaScript simulator matches the Python one to 1e-9.
+- The report's track views run their arithmetic in the browser; the same code, run in node, must reproduce every team's season loss rates and the headline ratio from the season analysis.
 - An end-to-end run on real Silverstone data must close on the official lap-time gap.
 - Reproducibility: two full rebuilds from the cache give identical outputs; CI runs ruff, mypy and the tests on a fresh install.
 - Review: automated physics, statistics and claims review passes were run against the code and the full results; every finding confirmed in them was fixed or the claim revised. The README findings and the technical note are generated from the results, so no number is typed by hand.

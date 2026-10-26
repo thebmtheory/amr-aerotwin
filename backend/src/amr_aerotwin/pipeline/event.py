@@ -208,6 +208,20 @@ def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[
     return out, ref, laps, warnings + w1
 
 
+def corner_positions(repo: TelemetryRepository, year: int, event: str, ref: Any) -> tuple[np.ndarray, list[str]]:
+    """Official corner markers projected onto the reference line: distances (m, ascending) and labels.
+
+    Anything that splits a lap into corners and straights must use these exact distances: the
+    event summary stores them rounded to 0.1 m, and a marker moved by a few centimetres can move a
+    5 m grid cell from one corner window to the next.
+    """
+    corners = repo.corners(year, event)
+    c_s, _ = project_onto_reference(corners["x_m"].to_numpy(), corners["y_m"].to_numpy(), ref)
+    order = np.argsort(c_s)
+    labels = [f"T{n}{lp}" for n, lp in zip(corners["number"].to_numpy()[order], corners["letter"].to_numpy()[order])]
+    return np.asarray(c_s[order], dtype=float), labels
+
+
 def _export_trace(arr: np.ndarray, nd: int = 2) -> list:
     return _r(np.asarray(arr)[::EXPORT_STEP], nd)
 
@@ -327,12 +341,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     if wet_share >= 0.5:
         warns.append(f"wet session: {wet_share:.0%} of timed laps on intermediate or wet tyres; left out of the season analyses")
 
-    # Corners on the reference line
-    corners = repo.corners(year, event)
-    c_s, _ = project_onto_reference(corners["x_m"].to_numpy(), corners["y_m"].to_numpy(), ref)
-    order = np.argsort(c_s)
-    c_s = c_s[order]
-    c_lab = [f"T{n}{lp}" for n, lp in zip(corners["number"].to_numpy()[order], corners["letter"].to_numpy()[order])]
+    c_s, c_lab = corner_positions(repo, year, event, ref)
     info = repo.circuit_info(year, event)
 
     # Corner minimum speeds checked against GPS (vs the field): a stuck speed channel at a corner
@@ -569,6 +578,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
                 "reference_compound": rp.reference_compound, "n_laps": rp.n_laps,
                 "residual_sd_s": _r(rp.residual_sd_s, 3),
                 "team_pace": _r(rp.team_pace.to_dict("records"), 3),
+                "driver_pace": _r(rp.driver_pace.to_dict("records"), 3),
                 "single_stint_drivers": list(rp.single_stint_drivers),
             }
         else:

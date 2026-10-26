@@ -594,8 +594,8 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
     section is short does not get the same weight as one where it is long. The bootstrap
     resamples events. Also reports how each team's straight-line rate compares with its
     corner rate, which separates a uniform deficit from a section-specific one, and the
-    target's straight-line rate over the highest of any other team's, with the maximum taken
-    inside each bootstrap draw so the interval covers "than any other team".
+    target's straight-line rate over the highest of any other team's on the same tracks
+    (`straight_vs_field`).
     """
     rng = np.random.default_rng(seed)
     out: dict[str, Any] = {}
@@ -630,21 +630,43 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
                 st_boot[team] = boot[:, st_i]
             teams_out[team] = row
         if target in st_boot and len(st_boot) > 1:
-            rivals = [t for t in st_boot if t != target]
-            point = {t: teams_out[t]["rate_pct"][teams_out[t]["sections"].index("straights")] for t in rivals}
-            nxt = max(point, key=lambda t: point[t])
-            t_rate = teams_out[target]["rate_pct"][teams_out[target]["sections"].index("straights")]
-            best_rival = np.max(np.column_stack([st_boot[t] for t in rivals]), axis=1)
-            ratio_b = st_boot[target] / np.where(best_rival > 1e-9, best_rival, np.nan)
-            vs_field[str(season)] = _r({
-                "next_team": nxt, "next_rate_pct": point[nxt],
-                "ratio": t_rate / point[nxt] if point[nxt] > 0 else float("nan"),
-                "ratio_ci90": list(boot_ci(ratio_b, int(teams_out[target]["n_events"]))),
-                "p_ratio_above_2": float(np.nanmean(ratio_b > 2)),
-                "n_rivals": len(rivals),
-            }, 4)
+            vs_field[str(season)] = straight_vs_field(g, target, [t for t in st_boot if t != target], n_boot, seed, int(season))
         out[str(season)] = _r(teams_out, 4)
     return out, vs_field
+
+
+def straight_vs_field(sec: pd.DataFrame, target: str, rivals: list[str], n_boot: int = 2000, seed: int = 21,
+                      season: int = 0) -> dict[str, Any]:
+    """The target's straight-line loss rate over the highest of any rival's, on the same tracks.
+
+    Every team is summed over the events where the target has a passing lap, so the track mix
+    is the same for all, and the bootstrap resamples those events once for every team (paired).
+    The maximum over rivals is taken inside each draw, so the interval covers "than any other
+    team". A rival with no passing lap at an event has no row there and drops out of that
+    event's sums. The draws come from their own random stream, so adding this comparison does
+    not move any other interval.
+    """
+    st = sec[sec["section"] == "straights"]
+    piv_l = st.pivot_table(index="round", columns="team", values="loss_s", aggfunc="sum")
+    piv_r = st.pivot_table(index="round", columns="team", values="reference_time_s", aggfunc="sum")
+    rounds = piv_l.index[piv_l[target].notna()]
+    teams = [target] + list(rivals)
+    L = piv_l.reindex(index=rounds, columns=teams).to_numpy()
+    R = np.where(np.isnan(L), np.nan, piv_r.reindex(index=rounds, columns=teams).to_numpy())
+    point = 100 * np.nansum(L, 0) / np.nansum(R, 0)
+    idx = np.random.default_rng([seed, season]).integers(0, len(rounds), size=(n_boot, len(rounds)))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        boot = 100 * np.nansum(L[idx], 1) / np.nansum(R[idx], 1)
+    best = np.nanmax(boot[:, 1:], axis=1)
+    ratio_b = boot[:, 0] / np.where(best > 1e-9, best, np.nan)
+    j = int(np.nanargmax(point[1:]))
+    return _r({
+        "next_team": teams[1 + j], "next_rate_pct": float(point[1 + j]), "target_rate_pct": float(point[0]),
+        "ratio": float(point[0] / point[1 + j]) if point[1 + j] > 0 else float("nan"),
+        "ratio_ci90": list(boot_ci(ratio_b, len(rounds))),
+        "p_ratio_above_2": float(np.nanmean(ratio_b > 2)),
+        "n_rivals": len(rivals), "n_events": int(len(rounds)),
+    }, 4)
 
 
 def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) -> dict[str, Any]:

@@ -2,14 +2,13 @@
 
 Data is written as small `window.*` script files rather than JSON so the site works from
 file:// or any static host such as GitHub Pages (no fetch, no server). Each event's
-detail file is loaded only when that event is selected.
+detail files (here and in report.explorer) are loaded only when that track is opened.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -41,18 +40,7 @@ def _clean(x: Any) -> Any:
     return x
 
 
-def _event_report_links(reports_dir: Path | None) -> list[tuple[str, str]]:
-    """(relative href, title) for each single-event report page in `reports_dir`."""
-    if reports_dir is None or not Path(reports_dir).is_dir():
-        return []
-    out = []
-    for f in sorted(Path(reports_dir).glob("*.html")):
-        m = re.search(r"<title>(.*?)</title>", f.read_text(encoding="utf-8")[:8192], re.S)
-        out.append((f"reports/{f.name}", (m.group(1).strip() if m else f.stem).replace("Aston Martin at ", "")))
-    return out
-
-
-def build_site(processed_dir: Path, site_dir: Path, reports_dir: Path | None = None) -> Path:
+def build_site(processed_dir: Path, site_dir: Path) -> Path:
     processed_dir, site_dir = Path(processed_dir), Path(site_dir)
     season = json.loads((processed_dir / "season.json").read_text())
     events = {p.stem: json.loads(p.read_text()) for p in sorted((processed_dir / "events").glob("*.json"))}
@@ -64,20 +52,13 @@ def build_site(processed_dir: Path, site_dir: Path, reports_dir: Path | None = N
     (site_dir / "data" / "events").mkdir(parents=True)
     (site_dir / MARKER).write_text("built by aerotwin report\n", encoding="utf-8")
     for f in STATIC.iterdir():
-        if f.is_file() and f.name != "event_report.html":
+        if f.is_file():
             shutil.copy(f, site_dir / f.name)
-    links = _event_report_links(reports_dir)
-    if links:
-        (site_dir / "reports").mkdir()
-        for href, _ in links:
-            shutil.copy(Path(reports_dir) / Path(href).name, site_dir / href)  # type: ignore[arg-type]
     # page.html is the body fragment (used as-is by hosts that add their own document
     # skeleton); index.html wraps it for GitHub Pages and local viewing.
     fragment = (STATIC / "page.html").read_text(encoding="utf-8")
-    fragment = fragment.replace("<!--EVENT_REPORTS-->", "".join(f'<a href="{href}" class="nav-report">{title} report</a>' for href, title in links))
-    (site_dir / "page.html").write_text(fragment, encoding="utf-8")
     # Content-hash query strings so browsers never run a stale script after a rebuild
-    for asset in ("app.js", "app.css", "lapsim.js"):
+    for asset in ("app.js", "app.css", "lapsim.js", "trackmath.js"):
         h = hashlib.sha1((STATIC / asset).read_bytes()).hexdigest()[:8]
         fragment = fragment.replace(f'"{asset}"', f'"{asset}?v={h}"')
     head, body = fragment.split("<header", 1)  # title/meta/link lines go in <head>

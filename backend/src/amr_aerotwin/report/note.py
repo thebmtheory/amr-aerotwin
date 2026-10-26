@@ -106,8 +106,8 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         "# Where Aston Martin loses time: technical note",
         "",
         "*Generated from `data/processed/season.json` by `aerotwin report`. Public data only; not affiliated with Aston Martin Aramco F1 Team. "
-        "Intervals are 90% bootstrap intervals over events unless stated, widened for small samples (expanded percentile bootstrap: with five to ten events "
-        "plain percentile intervals cover only about 80–85%).*",
+        "Intervals are 90% bootstrap intervals over events unless stated, widened for small samples (expanded percentile bootstrap: with as few events as "
+        "here, plain percentile intervals cover less than their nominal level, which the tests check by simulation).*",
         "",
         "## Findings",
         "",
@@ -115,8 +115,9 @@ def build_note(season_json: Path, out_md: Path) -> Path:
         f"in a section ÷ the pole lap's time there, summed over events. Aston Martin's 2026 straight-line rate is {_f(st26.get('v'), 2)}% "
         f"[{_f(st26.get('lo'), 2)}, {_f(st26.get('hi'), 2)}] against {_f(a26.get('corner_rate_pct'), 2)}% in the corners, a ratio of "
         f"{_f(a26.get('straight_to_corner_ratio'), 2)} [{ci(a26.get('straight_to_corner_ci90'), 2)}]. Every other team with five or more events (its own pole laps count as zero loss) has a straight-line rate between "
-        f"{_f(min(o_st), 2)}% and {_f(max(o_st), 2)}%; Aston Martin's is {_f(vf.get('ratio'), 2)} times the highest of them ({vf.get('next_team', 'n/a')}) "
-        f"[{ci(vf.get('ratio_ci90'), 2)}, the maximum over rivals taken inside each bootstrap draw], so \"twice\" is the central estimate, not a lower bound "
+        f"{_f(min(o_st), 2)}% and {_f(max(o_st), 2)}%. Summing every team over the same {vf.get('n_events')} events (those where Aston Martin has a passing lap), "
+        f"Aston Martin's rate is {_f(vf.get('ratio'), 2)} times the highest of the others ({vf.get('next_team', 'n/a')}, {_f(vf.get('next_rate_pct'), 2)}%) "
+        f"[{ci(vf.get('ratio_ci90'), 2)}, paired bootstrap over those events with the maximum over rivals taken inside each draw], so \"twice\" is the central estimate, not a lower bound "
         f"({_f(100 * (vf.get('p_ratio_above_2') or 0), 0)}% of bootstrap draws exceed 2). Teams at least 1% off pole over a lap have straights-to-corners ratios between "
         f"{_f(min(o_ratio), 2)} and {_f(max(o_ratio), 2)}. Cadillac, as slow over a lap "
         f"({_f(cad.get('lap_rate_pct'), 2)}% vs {_f(a26.get('lap_rate_pct'), 2)}%), loses {_f(cad_st.get('v'), 2)}% on the straights. Nearer the front the ratio is unstable "
@@ -288,9 +289,9 @@ def readme_blocks(s: dict[str, Any]) -> dict[str, str]:
     vs = s["variance_split"]
     findings = "\n".join([
         "- **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent "
-        f"in each part of the lap, it loses {_f(st26.get('v'), 1)}% on the straights against at most {_f(vf.get('next_rate_pct'), 1)}% for any other team ({nxt}, "
-        f"{_f(nxt_lap, 2)}% off pole over a lap against Aston Martin's {_f(a26.get('lap_rate_pct'), 2)}%): {_f(vf.get('ratio'), 1)} times as much, 90% interval "
-        f"{_f((vf.get('ratio_ci90') or [None])[0], 1)} to {_f((vf.get('ratio_ci90') or [None, None])[1], 1)}. "
+        f"in each part of the lap, it loses {_f(st26.get('v'), 1)}% on the straights. On the same {vf.get('n_events')} tracks no other team loses more than "
+        f"{_f(vf.get('next_rate_pct'), 1)}% ({nxt}, {_f(nxt_lap, 2)}% off pole over a lap against Aston Martin's {_f(a26.get('lap_rate_pct'), 2)}%): "
+        f"{_f(vf.get('ratio'), 1)} times as much, 90% interval {_f((vf.get('ratio_ci90') or [None])[0], 1)} to {_f((vf.get('ratio_ci90') or [None, None])[1], 1)}. "
         + ("Every other team" if ratios and max(ratios) < 1 else "Most teams") + " more than 1% off pole loses less per second "
         f"on the straights than in the corners (ratios {_f(min(ratios), 2)} to {_f(max(ratios), 2)}, against {_f(a26.get('straight_to_corner_ratio'), 2)} for Aston Martin)"
         + (f", as did Aston Martin in 2025 ({_f(a25.get('straight_to_corner_ratio'), 2)})." if (a25.get("straight_to_corner_ratio") or 9) < 1 else "."),

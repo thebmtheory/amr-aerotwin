@@ -15,11 +15,12 @@ const OUT = process.argv[3] || "docs/img";
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const PORT = 9333;
 
-// [output name, page path, chart id, season toggle to click first (or null)]
+// [output name, page path, chart id, control to click first (or null)]. The track detail
+// opens on Silverstone 2026 by default.
 const FIGURES = [
   ["loss-rates", "", "ch-rates", null],
-  ["silverstone-gap", "reports/british-grand-prix.html", "ch-rival", null],
-  ["silverstone-straights", "reports/british-grand-prix.html", "ch-st-1", null],
+  ["silverstone-gap", "", "ch-rival", null],
+  ["silverstone-straights", "", "ch-ftl", null],
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -83,7 +84,7 @@ try {
       const box = (await c.send("Runtime.evaluate", {
         returnByValue: true,
         expression: `(() => {
-          document.querySelectorAll('.masthead, .season-bar').forEach(e => e.style.position = 'static');
+          document.querySelectorAll('.masthead').forEach(e => e.style.position = 'static');
           const fig = document.getElementById(${JSON.stringify(chart)}).closest('figure');
           fig.scrollIntoView({ block: 'start' });
           const r = fig.getBoundingClientRect();
