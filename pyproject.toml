@@ -4,39 +4,40 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amr-aerotwin"
-version = "0.1.0"
-description = "Physics-Informed Reduced-Order & Surrogate Modeling Platform for Track-to-Simulation Aero Correlation and Setup Optimization"
+version = "0.2.0"
+description = "Track-data vehicle science for F1: physics-based lap simulation, calibration, grip and energy analysis from public timing data"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [
-    { name = "Aston Martin F1 Vehicle Science Candidate" }
-]
+authors = [{ name = "thebmtheory" }]
 dependencies = [
-    "numpy>=1.26.0",
-    "pandas>=2.2.0",
-    "scipy>=1.12.0",
-    "scikit-learn>=1.4.0",
-    "fastf1>=3.3.0",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.28.0",
-    "pydantic>=2.6.0",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.12",
+    "scikit-learn>=1.4",
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    "httpx>=0.27.0",
-    "ruff>=0.3.0",
-    "mypy>=1.9.0",
-]
+dev = ["pytest>=8.0", "ruff>=0.3", "mypy>=1.9"]
+
+[project.scripts]
+aerotwin = "amr_aerotwin.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["backend/src"]
 
+[tool.setuptools.package-data]
+amr_aerotwin = ["report/templates/*", "report/static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 pythonpath = ["backend/src"]
+markers = ["data: tests that need the cached telemetry fixture"]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY"]
+ignore = ["E501", "B905"]

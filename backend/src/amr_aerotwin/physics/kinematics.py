@@ -1,74 +1,160 @@
-"""Module 1: Aerodynamic Thermodynamics, Track Kinematics, and Wind Yaw Vector Decomposition.
-
-This module transforms raw spatial trajectories (X, Y, s) and meteorological telemetry
-into physical vehicle-frame aerodynamic states (air density, curvature, lateral/longitudinal
-accelerations, true airspeed, and aerodynamic yaw angle beta_aero).
-"""
+"""Air density, path geometry (heading and curvature) and wind decomposition in the car frame."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 from numpy.typing import NDArray
+from scipy.interpolate import make_smoothing_spline
+from scipy.signal import savgol_filter
 
 from amr_aerotwin.domain import (
     KELVIN_OFFSET,
     R_SPECIFIC_DRY_AIR,
+    R_SPECIFIC_WATER_VAPOUR,
     AmbientState,
 )
 
 
+def saturation_vapour_pressure_pa(temp_c: float) -> float:
+    """Saturation vapour pressure over water (Buck 1981), Pa."""
+    return 611.21 * float(np.exp((18.678 - temp_c / 234.5) * (temp_c / (257.14 + temp_c))))
+
+
 def compute_air_density_kg_m3(ambient: AmbientState) -> float:
-    """Compute dry air density rho (kg/m^3) using the Ideal Gas Law: rho = P / (R_specific * T).
+    """Moist-air density from the partial pressures of dry air and water vapour.
 
-    Why Vehicle Science cares:
-    Aerodynamic downforce (L = 0.5 * rho * v_air^2 * C_L * A) and drag scale linearly with
-    air density rho. Comparing Silverstone (sea level, cool) or FP1 (hot afternoon) to
-    Qualifying (cool evening) without normalizing for rho introduces a 2-4% aero error.
-
-    Args:
-        ambient: AmbientState containing pressure_mbar (hPa) and air_temp_c (Celsius).
-
-    Returns:
-        Air density rho in kg/m^3.
+    Humid air is lighter than dry air: at 25 C and 70% RH the correction is about -1%.
     """
-    pressure_pa = ambient.pressure_mbar * 100.0
-    temp_kelvin = ambient.air_temp_c + KELVIN_OFFSET
-    return float(pressure_pa / (R_SPECIFIC_DRY_AIR * temp_kelvin))
+    temp_k = ambient.air_temp_c + KELVIN_OFFSET
+    p_total = ambient.pressure_mbar * 100.0
+    p_vapour = (ambient.relative_humidity_pct / 100.0) * saturation_vapour_pressure_pa(ambient.air_temp_c)
+    p_dry = p_total - p_vapour
+    return float(p_dry / (R_SPECIFIC_DRY_AIR * temp_k) + p_vapour / (R_SPECIFIC_WATER_VAPOUR * temp_k))
+
+
+def _periodic_gradient(f: NDArray[np.float64], step: float) -> NDArray[np.float64]:
+    return (np.roll(f, -1) - np.roll(f, 1)) / (2.0 * step)
 
 
 def compute_track_heading_and_curvature(
     distance_m: NDArray[np.float64],
     x_m: NDArray[np.float64],
     y_m: NDArray[np.float64],
+    closed: bool = False,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Compute instantaneous car heading angle psi(s) and signed track curvature kappa(s).
+    """Heading psi(s) (rad, CCW from +X/East) and signed curvature kappa(s) (1/m, + = left turn).
 
-    Mathematical Formulation:
-    Given parameterized spatial coordinates X(s), Y(s) with respect to arc length s:
-      - Tangent vector: (dX/ds, dY/ds)
-      - Heading angle (rad, mathematical convention from +X East axis):
-            psi(s) = arctan2(dY/ds, dX/ds)
-      - Signed planar curvature (m^-1):
-            kappa(s) = (X' Y'' - Y' X'') / ((X'^2 + Y'^2)^(3/2))
-
-    Args:
-        distance_m: Monotonically increasing arc-length array s (meters), shape (N,).
-        x_m: GPS X coordinate array (meters, East), shape (N,).
-        y_m: GPS Y coordinate array (meters, North), shape (N,).
-
-    Returns:
-        Tuple of (heading_rad, curvature_inv_m), each of shape (N,).
+    kappa = (x' y'' - y' x'') / (x'^2 + y'^2)^(3/2), derivatives with respect to arc length.
     """
-    dx_ds = np.gradient(x_m, distance_m)
-    dy_ds = np.gradient(y_m, distance_m)
-    d2x_ds2 = np.gradient(dx_ds, distance_m)
-    d2y_ds2 = np.gradient(dy_ds, distance_m)
+    if closed:
+        step = float(distance_m[1] - distance_m[0])
+        dx, dy = _periodic_gradient(x_m, step), _periodic_gradient(y_m, step)
+        ddx, ddy = _periodic_gradient(dx, step), _periodic_gradient(dy, step)
+    else:
+        dx, dy = np.gradient(x_m, distance_m), np.gradient(y_m, distance_m)
+        ddx, ddy = np.gradient(dx, distance_m), np.gradient(dy, distance_m)
+    heading = np.arctan2(dy, dx)
+    denom = np.maximum(np.power(dx**2 + dy**2, 1.5), 1e-9)
+    return heading, (dx * ddy - dy * ddx) / denom
 
-    heading_rad = np.arctan2(dy_ds, dx_ds)
-    denom = np.power(dx_ds**2 + dy_ds**2, 1.5)
-    denom = np.where(denom < 1e-9, 1e-9, denom)
-    curvature_inv_m = (dx_ds * d2y_ds2 - dy_ds * d2x_ds2) / denom
-    return heading_rad, curvature_inv_m
+
+def path_curvature(
+    distance_m: NDArray[np.float64],
+    x_m: NDArray[np.float64],
+    y_m: NDArray[np.float64],
+    smooth_window_m: float = 55.0,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Heading and curvature of a closed lap after periodic Savitzky-Golay smoothing of X/Y.
+
+    GPS positions arrive at ~4 Hz, so the second derivative is noisy without smoothing. A
+    ~55 m window keeps the apex radius of slow hairpins (R ~ 15-20 m) within a few percent
+    while suppressing jitter (checked by `turning_number`).
+    """
+    step = float(distance_m[1] - distance_m[0])
+    w = max(5, int(round(smooth_window_m / step)) | 1)
+    xs = savgol_filter(x_m, w, 3, mode="wrap")
+    ys = savgol_filter(y_m, w, 3, mode="wrap")
+    return compute_track_heading_and_curvature(distance_m, xs, ys, closed=True)
+
+
+GPS_SMOOTHING_CANDIDATES = (0.05, 0.1, 0.2, 0.4)
+
+
+def gps_position_splines(
+    fix_time_s: NDArray[np.float64],
+    fix_x_m: NDArray[np.float64],
+    fix_y_m: NDArray[np.float64],
+    lap_time_s: float,
+    lam: float = 0.2,
+):  # -> tuple[BSpline, BSpline]
+    """Smoothing splines x(t), y(t) through raw GPS fixes, periodically extended by one lap."""
+    order = np.argsort(fix_time_s, kind="stable")
+    t, x, y = fix_time_s[order], fix_x_m[order], fix_y_m[order]
+    keep = np.concatenate([[True], np.diff(t) > 1e-3])
+    t, x, y = t[keep], x[keep], y[keep]
+    t_ext = np.concatenate([t - lap_time_s, t, t + lap_time_s])
+    return (
+        make_smoothing_spline(t_ext, np.tile(x, 3), lam=lam),
+        make_smoothing_spline(t_ext, np.tile(y, 3), lam=lam),
+    )
+
+
+def gps_spline_kinematics(
+    fix_time_s: NDArray[np.float64],
+    fix_x_m: NDArray[np.float64],
+    fix_y_m: NDArray[np.float64],
+    lap_time_s: float,
+    eval_time_s: NDArray[np.float64],
+    lam: float = 0.2,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Curvature and GPS-derived speed from raw ~4 Hz fixes, smoothed in *time*.
+
+    Position error is roughly constant per fix, so smoothing x(t), y(t) gives lateral
+    acceleration noise that does not grow with speed (smoothing in distance over-smooths
+    hairpins and under-smooths 300 km/h corners). Returns (kappa at eval times, |v_gps|).
+    """
+    sx, sy = gps_position_splines(fix_time_s, fix_x_m, fix_y_m, lap_time_s, lam)
+    dx, dy = sx(eval_time_s, 1), sy(eval_time_s, 1)
+    ddx, ddy = sx(eval_time_s, 2), sy(eval_time_s, 2)
+    speed = np.hypot(dx, dy)
+    kappa = (dx * ddy - dy * ddx) / np.maximum(speed, 1.0) ** 3
+    return kappa, speed
+
+
+def select_gps_smoothing(
+    laps: Sequence[tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], float, NDArray[np.float64], NDArray[np.float64]]],
+    candidates: Sequence[float] = GPS_SMOOTHING_CANDIDATES,
+) -> tuple[float, dict[float, float]]:
+    """Choose the time-smoothing penalty that best reproduces the independent speed sensor.
+
+    Each lap tuple is (fix_t, fix_x, fix_y, lap_time, grid_t, measured_speed). The score
+    is the median over laps of the RMS difference between GPS-derived speed and the
+    wheel-speed channel: too little smoothing amplifies GPS noise, too much cuts corners.
+    """
+    scores: dict[float, float] = {}
+    for lam in candidates:
+        errs = []
+        for ft, fx, fy, lt, gt, v in laps:
+            _, v_gps = gps_spline_kinematics(ft, fx, fy, lt, gt, lam)
+            errs.append(float(np.sqrt(np.mean((v_gps - v) ** 2))))
+        scores[lam] = float(np.median(errs))
+    return min(scores, key=scores.__getitem__), scores
+
+
+def consensus_curvature(curvatures: Sequence[NDArray[np.float64]]) -> NDArray[np.float64]:
+    """Point-wise median curvature across many drivers' laps of the same layout.
+
+    Racing lines at one event differ by well under a metre, while single-lap GPS noise is
+    larger, so the median over ~20 laps is a far better estimate of the driven path.
+    """
+    return np.median(np.vstack(list(curvatures)), axis=0)
+
+
+def turning_number(curvature_inv_m: NDArray[np.float64], step_m: float) -> float:
+    """Total heading change / 2pi. A clean closed lap must give +1 (anticlockwise) or -1."""
+    return float(np.sum(curvature_inv_m) * step_m / (2.0 * np.pi))
 
 
 def decompose_aero_wind_vectors(
@@ -76,60 +162,25 @@ def decompose_aero_wind_vectors(
     heading_rad: NDArray[np.float64],
     ambient: AmbientState,
 ) -> dict[str, NDArray[np.float64]]:
-    """Decompose ambient wind into car-frame Headwind, Crosswind, Airspeed, and Yaw Angle.
+    """Project ambient wind onto the car axes.
 
-    Why Vehicle Science cares:
-    When an F1 car rounds a high-speed corner (like Copse or Maggotts-Becketts) at speed v_car,
-    an ambient crosswind v_wind creates a side-slip / aerodynamic yaw angle beta_aero.
-    Under high yaw (> 4-6 deg), the underbody diffuser and rear wing experience asymmetric
-    vortex shedding, causing sudden downforce loss.
-
-    Coordinate Geometry:
-    - Car heading angle `heading_rad` (psi) is measured counter-clockwise from East (+X).
-      Car unit tangent vector: t_hat = (cos(psi), sin(psi))
-      Car unit normal (left) vector: n_hat = (-sin(psi), cos(psi))
-    - Meteorological wind direction `wind_direction_deg` is the compass angle (0=N, 90=E)
-      that the wind is blowing FROM.
-      In standard mathematical angle (CCW from East +X), the direction the air mass moves
-      TOWARDS has velocity vector:
-          w_x = -v_wind * sin(theta_met)
-          w_y = -v_wind * cos(theta_met)
-    - Projecting the wind onto the car's body axis:
-      * Headwind component (opposing car motion, increasing aero dynamic pressure):
-            v_headwind = -(w_x * cos(psi) + w_y * sin(psi))
-      * Crosswind component (perpendicular to car heading):
-            v_crosswind = -(w_x * (-sin(psi)) + w_y * cos(psi))
-      * Effective longitudinal airspeed:
-            v_air_long = max(speed_ms + v_headwind, 1.0)
-      * Aerodynamic yaw angle (degrees):
-            beta_aero_deg = degrees(arctan2(v_crosswind, v_air_long))
-
-    Args:
-        speed_ms: Ground speed of the car (m/s), shape (N,).
-        heading_rad: Instantaneous car heading angle psi (radians, CCW from East), shape (N,).
-        ambient: AmbientState containing wind_speed_ms and wind_direction_deg.
-
-    Returns:
-        Dictionary with keys:
-          - 'v_headwind_ms': Headwind speed (+ means opposing car, - means tailwind)
-          - 'v_crosswind_ms': Crosswind speed (m/s)
-          - 'v_airspeed_ms': Effective resultant airspeed relative to car body (m/s)
-          - 'beta_aero_deg': Aerodynamic yaw angle in degrees
+    Wind blowing FROM compass bearing theta moves the air towards (-sin theta, -cos theta)
+    in (East, North). With car tangent t = (cos psi, sin psi) and left normal n = (-sin psi,
+    cos psi):
+      headwind   = -(w . t)            (+ opposes the car, raising airspeed)
+      crosswind  = -(w . n)            (+ means air arriving from the car's left)
+      yaw angle  = atan2(crosswind, v + headwind)
     """
-    theta_met_rad = np.radians(ambient.wind_direction_deg)
-    w_x = -ambient.wind_speed_ms * np.sin(theta_met_rad)
-    w_y = -ambient.wind_speed_ms * np.cos(theta_met_rad)
+    theta = np.radians(ambient.wind_direction_deg)
+    w_x = -ambient.wind_speed_ms * np.sin(theta)
+    w_y = -ambient.wind_speed_ms * np.cos(theta)
 
-    v_headwind_ms = -(w_x * np.cos(heading_rad) + w_y * np.sin(heading_rad))
-    v_crosswind_ms = -(-w_x * np.sin(heading_rad) + w_y * np.cos(heading_rad))
-
-    v_air_long_ms = np.maximum(speed_ms + v_headwind_ms, 1.0)
-    v_airspeed_ms = np.hypot(v_air_long_ms, v_crosswind_ms)
-    beta_aero_deg = np.degrees(np.arctan2(v_crosswind_ms, v_air_long_ms))
-
+    v_headwind = -(w_x * np.cos(heading_rad) + w_y * np.sin(heading_rad))
+    v_crosswind = -(-w_x * np.sin(heading_rad) + w_y * np.cos(heading_rad))
+    v_long = np.maximum(speed_ms + v_headwind, 1.0)
     return {
-        "v_headwind_ms": v_headwind_ms,
-        "v_crosswind_ms": v_crosswind_ms,
-        "v_airspeed_ms": v_airspeed_ms,
-        "beta_aero_deg": beta_aero_deg,
+        "v_headwind_ms": v_headwind,
+        "v_crosswind_ms": v_crosswind,
+        "v_airspeed_ms": np.hypot(v_long, v_crosswind),
+        "beta_aero_deg": np.degrees(np.arctan2(v_crosswind, v_long)),
     }
