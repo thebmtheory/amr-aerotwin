@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AMR Analysis</title>
+<meta name="description" content="An independent analysis of public F1 timing data by Balaji Murugan: where the Aston Martin loses lap time, how sure I am of each part, and the physics and data science behind it.">
+<meta name="author" content="Balaji Murugan">
+<meta name="theme-color" content="#0a0c0b">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AMR Analysis">
+<meta property="og:title" content="Aston Martin F1 Team: independent analysis">
+<meta property="og:description" content="Where the Aston Martin loses lap time in qualifying, from public F1 timing data. By Balaji Murugan.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Commissioner:wght@200..700&display=swap">
+<link rel="stylesheet" href="app.css?v=472f4139">
+
+</head>
+<body>
+<header class="masthead">
+  <a class="skip" href="#findings">Skip to the findings</a>
+  <div class="wrap masthead-inner">
+    <a class="brand" href="#top"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 10h10.5l4.3 12.2c.6 1.7 3 1.8 3.7.1L29 11.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="brand-name">AMR Analysis</span></a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#findings">Findings</a>
+      <a href="#approach">Approach</a>
+      <a href="#models">Models</a>
+      <a href="#data">Data</a>
+      <a href="#tracks">Explore</a>
+      <a href="#checks">Checks</a>
+      <a href="#method">Limits</a>
+    </nav>
+    <a class="byline" href="#author"><span class="by">By</span>&nbsp;Balaji Murugan<svg width="10" height="12" viewBox="0 0 10 12" fill="none" aria-hidden="true"><path d="M5 0v10M1 6.5l4 4 4-4" stroke="currentColor" stroke-width="1.4"/></svg></a>
+  </div>
+  <div class="filterbar">
+    <div class="wrap filters" role="group" aria-label="Filters for the report">
+      <div class="f-item">
+        <span class="f-label" id="lbl-season">Season</span>
+        <div class="seg" id="f-season" role="group" aria-labelledby="lbl-season"></div>
+      </div>
+      <div class="f-item ms" id="f-drivers"></div>
+      <div class="f-item ms" id="f-tracks"></div>
+      <p class="f-status" id="f-status" aria-live="polite"></p>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="band night hero">
+    <div class="wrap hero-inner">
+      <p class="label" data-fill="hero_kicker"></p>
+      <h1 class="title">Aston Martin F1 Team<span class="sr">:</span> <span class="sub">Independent analysis</span></h1>
+      <p class="deck">In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.</p>
+      <p class="lede">I lined up every driver's best qualifying lap on a shared distance grid and split the gap to the fastest lap into corners and straights. Below is what came out and how sure I am of each part, then the physics and data science behind it and how I handled the data.</p>
+      <div class="hero-foot">
+        <a class="go" href="#findings">Read the findings<svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true"><path d="M0 6h16M11 1l5 5-5 5" stroke="currentColor" stroke-width="1.5"/></svg></a>
+        <p class="note" data-fill="data_through"></p>
+      </div>
+    </div>
+    <div class="wrap">
+      <figure class="fig hero-fig">
+        <figcaption><strong data-fill="hero_fig_title"></strong> <span data-fill="hero_fig_sub"></span></figcaption>
+        <div id="ch-hero" class="chart" role="img" aria-label="Straight-line loss rate of every team, latest season"></div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="band forest" aria-label="The headline numbers">
+    <div class="wrap numbers" id="numbers"></div>
+  </section>
+
+  <section id="findings" class="band paper">
+    <div class="wrap section">
+      <p class="giant" aria-hidden="true">Findings</p>
+      <div class="sec-intro">
+        <h2>What I found</h2>
+        <p data-fill="findings_intro"></p>
+      </div>
+      <ol class="findings" id="findings-list"></ol>
+      <div class="read-rates">
+        <p class="label">How to read the loss rates</p>
+        <p class="note" data-fill="hero_note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="evidence" class="band mist">
+    <div class="wrap section">
+      <div class="sec-head">
+        <p class="label">The evidence</p>
+        <h2>Where the gap comes from</h2>
+        <p class="scope" data-scope="finding"></p>
+      </div>
+
+      <article class="ev split" id="ev-rates">
+        <div class="ev-text">
+          <p class="label">Findings 01 and 02 | Corners and straights</p>
+          <h3>Loss rates, team by team</h3>
+          <p>Each team's best lap is lined up with the pole lap, and the time difference is split into corners (braking, apex and exit, <span data-fill="corner_window"></span> either side of each corner) and everything in between. Dividing the time lost in each part by the time the pole lap spends there gives a loss rate. Points below the diagonal lose less per second on the straights than in the corners.</p>
+          <p data-fill="decomp_text"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Loss rate to pole, corners against straights</strong> <span data-fill="rates_sub"></span></figcaption>
+          <div id="ch-rates" class="chart square" role="img" aria-label="Corner and straight loss rates by team"></div>
+        </figure>
+      </article>
+
+      <article class="ev" id="ev-straight">
+        <div class="ev-head">
+          <p class="label">Finding 03 | Along the straight</p>
+          <h3>Speed along the main straights</h3>
+          <p data-fill="finding_text"></p>
+        </div>
+        <div class="grid2">
+          <figure class="fig">
+            <figcaption><strong>Speed gap to the other teams along the main straights</strong> <span>km/h, <span data-fill="profile_bins"></span> equal pieces from corner exit to braking point, band = <span data-fill="lvl"></span> interval</span></figcaption>
+            <div id="ch-profile" class="chart" role="img" aria-label="Speed gap along the straights"></div>
+          </figure>
+          <figure class="fig">
+            <figcaption><strong>How the gap changes in each half of the straight</strong> <span data-fill="halves_sub"></span></figcaption>
+            <div id="ch-halves" class="chart" role="img" aria-label="First and second half changes by team"></div>
+          </figure>
+        </div>
+      </article>
+
+      <article class="ev" id="ev-power">
+        <div class="ev-head">
+          <p class="label">Finding 04 | Power or drag</p>
+          <h3>Power, drag and energy use</h3>
+          <p data-fill="joint_text"></p>
+        </div>
+        <div class="grid2">
+          <figure class="fig">
+            <figcaption><strong>Power or drag? The data can't tell</strong> <span>bootstrap draws of the joint estimate against the field</span></figcaption>
+            <div id="ch-joint" class="chart" role="img" aria-label="Joint power and drag estimate"></div>
+          </figure>
+          <figure class="fig">
+            <figcaption><strong>Time lost against holding peak speed</strong> <span data-fill="clip_sub"></span></figcaption>
+            <div id="ch-clip" class="chart" role="img" aria-label="Clipping time loss by team"></div>
+          </figure>
+        </div>
+        <div class="prose wide-prose" id="energy">
+          <p class="scope" data-scope="energy"></p>
+          <p data-fill="energy_text"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Speed on the straights</strong> <span id="energy-sub">selected track</span></figcaption>
+          <div id="ch-energy" class="chart" role="img" aria-label="Speed along the straights at the selected track"></div>
+        </figure>
+      </article>
+
+      <article class="ev split" id="ev-corners">
+        <div class="ev-text">
+          <p class="label">Corners | What the deficits add up to</p>
+          <h3>Corner speeds, and how much of the gap they explain</h3>
+          <p class="scope" data-scope="corners"></p>
+          <p data-fill="accounting_text"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Corner minimum speed against the other teams at the same corner</strong> <span>km/h by corner class, <span data-fill="lvl"></span> interval over events</span></figcaption>
+          <div id="ch-deficit" class="chart" role="img" aria-label="Team corner deficit"></div>
+        </figure>
+      </article>
+
+      <article class="ev split" id="ev-order">
+        <div class="ev-text">
+          <p class="label">Finding 05 | Who sets the order</p>
+          <h3>How much of the order comes from the team</h3>
+          <p data-fill="var_text"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Between-team share of the spread in qualifying gaps</strong> <span><span data-fill="lvl"></span> interval</span></figcaption>
+          <div id="ch-var" class="chart short" role="img" aria-label="Variance share between teams by season"></div>
+        </figure>
+      </article>
+
+      <article class="ev" id="upgrades">
+        <div class="ev-head">
+          <p class="label">Finding 06 | Upgrades</p>
+          <h3>What the upgrades changed</h3>
+          <p class="scope" data-scope="upgrades"></p>
+          <p data-fill="upgrade_text"></p>
+        </div>
+        <div class="grid2">
+          <figure class="fig">
+            <figcaption><strong>Fast-corner grip against the field median</strong> <span data-fill="season_upg_sub"></span></figcaption>
+            <div id="ch-season-grip" class="chart" role="img" aria-label="Fast corner grip ratio over the season"></div>
+          </figure>
+          <figure class="fig">
+            <figcaption><strong>Peak speed on the main straights against the field median</strong> <span data-fill="season_kmh_sub"></span></figcaption>
+            <div id="ch-season-speed" class="chart" role="img" aria-label="Straight-line speed difference over the season"></div>
+          </figure>
+        </div>
+        <div class="grid2">
+          <figure class="fig">
+            <figcaption><strong>Qualifying gap to the fastest lap</strong> <span>team best, %, grey band = middle half of the field</span></figcaption>
+            <div id="ch-gap" class="chart" role="img" aria-label="Qualifying gap over the season"></div>
+          </figure>
+          <figure class="fig">
+            <figcaption><strong>Where did the pace change?</strong> <span>Bayesian changepoint, posterior probability for each event</span></figcaption>
+            <div id="ch-cp" class="chart" role="img" aria-label="Changepoint posterior"></div>
+          </figure>
+        </div>
+        <div class="table-wrap">
+          <table class="data" id="tbl-did"></table>
+        </div>
+      </article>
+
+      <article class="ev" id="race">
+        <div class="ev-head">
+          <p class="label">Finding 07 | Race pace</p>
+          <h3>Race pace, corrected for fuel and tyres</h3>
+          <p class="scope" data-scope="race"></p>
+          <p data-fill="race_text"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Corrected race-pace gap to the best team, with the qualifying gap</strong> <span>s per lap, each selected driver, <span data-fill="lvl"></span> interval</span></figcaption>
+          <div id="ch-race" class="chart tall" role="img" aria-label="Race pace of each Aston Martin driver by track"></div>
+        </figure>
+      </article>
+    </div>
+  </section>
+
+  <section id="approach" class="band paper">
+    <div class="wrap section">
+      <div class="sec-head">
+        <p class="label">How I did it</p>
+        <h2>From raw timing data to this page</h2>
+        <p class="lede-sm">Six steps. The figure under each one comes from this run of the pipeline.</p>
+      </div>
+      <ol class="steps">
+        <li>
+          <p class="n">01</p>
+          <h3>Collect</h3>
+          <p>Each driver's fastest qualifying lap with its car data and GPS, and the official times of every qualifying and race lap, from a public archive of F1 live timing.</p>
+          <p class="tools">Python, requests, pandas</p>
+          <p class="res" data-fill="step_collect"></p>
+        </li>
+        <li>
+          <p class="n">02</p>
+          <h3>Check</h3>
+          <p>Automated checks on every lap catch broken telemetry: frozen or stalled channels, dropouts, GPS that disagrees with the wheel-speed sensor, and clocks that don't match.</p>
+          <p class="tools">Bounds set from the spread on clean laps</p>
+          <p class="res" data-fill="step_check"></p>
+        </li>
+        <li>
+          <p class="n">03</p>
+          <h3>Align</h3>
+          <p>Each lap is projected onto the reference lap's line on a shared distance grid. Its GPS and car-data clocks are matched, and it's re-timed to the timing line.</p>
+          <p class="tools">Projection onto a reference line, signal matching, smoothing splines</p>
+          <p class="res" data-fill="step_align"></p>
+        </li>
+        <li>
+          <p class="n">04</p>
+          <h3>Physics</h3>
+          <p>Speed, acceleration, curvature and gradient are worked out along every lap. A point-mass lap simulator, driven by the track's curvature, is calibrated to the pole lap and to Aston Martin's best lap at each event.</p>
+          <p class="tools">Vehicle dynamics, friction ellipse, Bayesian calibration</p>
+          <p class="res" data-fill="step_physics"></p>
+        </li>
+        <li>
+          <p class="n">05</p>
+          <h3>Model</h3>
+          <p>Statistics built for small samples, an emulator and a reduced-order model of the simulator, and machine learning only on what the physics misses.</p>
+          <p class="tools">Bootstrap, Bayesian changepoints, difference-in-differences, Gaussian processes, POD, gradient boosting, conformal prediction</p>
+          <p class="res" data-fill="step_model"></p>
+        </li>
+        <li>
+          <p class="n">06</p>
+          <h3>Report</h3>
+          <p>This page and the technical note are written from the results every time the pipeline runs. Tests check the wording against the data, and that the simulator in your browser matches the Python one.</p>
+          <p class="tools">Plotly, JavaScript, pytest</p>
+          <p class="res">No result on this page is typed by hand.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="models" class="band forest">
+    <div class="wrap section models-intro">
+      <p class="label">The physics and data science</p>
+      <h2 class="display">How I tested what I found</h2>
+      <p class="lede">Timing data shows where a car is slow. It can't say why, or how far to trust any single number. So I built a small stack of models around the findings. Each one answers one narrow question, and where I can, I check it on data it wasn't fitted to.</p>
+      <ol class="stack" aria-label="The model stack, in the order it runs">
+        <li><span class="n">01</span><a href="#sim">Lap simulator</a><span class="k">Physics</span></li>
+        <li><span class="n">02</span><a href="#m-cal">Calibration</a><span class="k">Bayesian</span></li>
+        <li><span class="n">03</span><a href="#m-surrogate">Surrogate</a><span class="k">Gaussian-process emulator</span></li>
+        <li><span class="n">04</span><a href="#m-rom">Reduced-order model</a><span class="k">POD</span></li>
+        <li><span class="n">05</span><a href="#m-disc">Discrepancy model</a><span class="k">Gaussian process</span></li>
+        <li><span class="n">06</span><a href="#m-hybrid">Hybrid model</a><span class="k">Physics plus boosting</span></li>
+      </ol>
+      <p class="scope" data-scope="sim"></p>
+    </div>
+  </section>
+
+  <section class="band paper" aria-label="The models, one by one">
+    <div class="wrap">
+      <article id="sim" class="module">
+        <div class="mod-text">
+          <p class="label">01 | Lap simulator</p>
+          <h3>A physics model of the lap</h3>
+          <p>A quasi-steady point-mass simulator. A few numbers describe the car: grip, downforce, drag, power, and how much of the grip is left for braking and traction. Grip is <span class="eq">μ(g + qC<sub>L</sub>A/m)</span> on a friction ellipse, with a power limit and drag on top. Give it a track's shape from GPS and it returns a speed trace and a lap time.</p>
+          <dl class="dl-figs" id="sim-dl"></dl>
+          <p class="note" data-fill="sim_note"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Measured and simulated speed</strong> <span id="sim-sub"></span></figcaption>
+          <div id="ch-sim" class="chart" role="img" aria-label="Simulated and measured speed"></div>
+        </figure>
+        <div class="sandbox mod-wide" id="sandbox">
+          <div class="sb-head">
+            <h4>Set-up sandbox</h4>
+            <p class="hint" data-fill="sb_hint"></p>
+          </div>
+          <div class="sliders">
+            <label><span>Downforce C<sub>L</sub>A</span> <output id="o-cla"></output><input id="s-cla" type="range" min="-10" max="10" step="0.5" value="0"></label>
+            <label><span>Drag C<sub>D</sub>A</span> <output id="o-cda"></output><input id="s-cda" type="range" min="-10" max="10" step="0.5" value="0"></label>
+            <label><span>Wheel power</span> <output id="o-pow"></output><input id="s-pow" type="range" min="-60" max="60" step="2" value="0"></label>
+            <label><span>Mass</span> <output id="o-mass"></output><input id="s-mass" type="range" min="-10" max="10" step="1" value="0"></label>
+          </div>
+          <div class="sb-out">
+            <p class="readout"><span id="sb-time">–</span><span id="sb-delta"></span></p>
+            <button type="button" id="sb-reset" class="btn">Reset</button>
+          </div>
+        </div>
+      </article>
+
+      <article id="m-cal" class="module flip">
+        <div class="mod-text">
+          <p class="label">02 | Calibration</p>
+          <h3>Fitting the simulator to real laps</h3>
+          <p data-fill="cal_text"></p>
+          <dl class="dl-figs" id="cal-dl"></dl>
+          <p class="note" data-fill="calacc_text"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Calibration accuracy across events</strong> <span>reference lap, simulated minus actual lap time, bars = <span data-fill="lvl"></span> posterior interval</span></figcaption>
+          <div id="ch-calacc" class="chart" role="img" aria-label="Calibration lap time error by event"></div>
+        </figure>
+        <div class="table-wrap mod-wide"><table class="data" id="tbl-params"></table></div>
+      </article>
+
+      <article id="m-surrogate" class="module">
+        <div class="mod-text">
+          <p class="label">03 | Surrogate</p>
+          <h3>A stand-in for set-up questions</h3>
+          <p data-fill="surr_text"></p>
+          <dl class="dl-figs" id="surr-dl"></dl>
+          <p class="note" data-fill="surr_note"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Emulator against the simulator, on runs it never saw</strong> <span id="surr-sub"></span></figcaption>
+          <div id="ch-surr" class="chart square" role="img" aria-label="Emulator predictions against simulator lap-time changes on held-out runs"></div>
+        </figure>
+        <div class="grid2 mod-wide">
+          <figure class="fig">
+            <figcaption><strong>Which input moves lap time</strong> <span id="sobol-sub"></span></figcaption>
+            <div id="ch-sobol" class="chart short" role="img" aria-label="First-order sensitivity indices from the emulator"></div>
+          </figure>
+          <figure class="fig">
+            <figcaption><strong>Held-out error, track by track</strong> <span data-fill="surr_ev_sub"></span></figcaption>
+            <div id="ch-surr-ev" class="chart short" role="img" aria-label="Emulator and linear surrogate error at each track"></div>
+          </figure>
+        </div>
+        <div class="mod-wide sub-module" id="aero">
+          <div class="ev split">
+            <div class="ev-text">
+              <p class="label">The linear version | Aero map</p>
+              <h4>One per cent of downforce or drag, track by track</h4>
+              <p class="scope" data-scope="aero"></p>
+              <p data-fill="aero_text"></p>
+            </div>
+            <figure class="fig">
+              <figcaption><strong>Downforce-equivalent against drag-equivalent, relative to the field median</strong> <span>%, lines = equal lap-time cost from the calibrated simulator (season average)</span></figcaption>
+              <div id="ch-aero" class="chart square" role="img" aria-label="Aero map scatter"></div>
+            </figure>
+          </div>
+          <figure class="fig">
+            <figcaption><strong>What one per cent is worth at each circuit</strong> <span>lap-time change, s, from the calibrated simulator</span></figcaption>
+            <div id="ch-sens" class="chart tall" role="img" aria-label="Sensitivity by circuit"></div>
+          </figure>
+        </div>
+      </article>
+
+      <article id="m-rom" class="module flip">
+        <div class="mod-text">
+          <p class="label">04 | Reduced-order model</p>
+          <h3>A lap in a handful of numbers</h3>
+          <p data-fill="rom_text"></p>
+          <dl class="dl-figs" id="rom-dl"></dl>
+          <p class="note" data-fill="rom_note"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Share of the differences between cars, by shape</strong> <span id="pod-sub"></span></figcaption>
+          <div id="ch-pod" class="chart" role="img" aria-label="Variance explained by each POD shape"></div>
+        </figure>
+        <div class="grid2 mod-wide">
+          <figure class="fig">
+            <figcaption><strong>The first shape along the lap</strong> <span id="pod-mode-sub"></span></figcaption>
+            <div id="ch-pod-mode" class="chart short" role="img" aria-label="First POD shape along the lap"></div>
+          </figure>
+          <figure class="fig">
+            <figcaption><strong>Every car on the first two shapes</strong> <span>coefficients, km/h</span></figcaption>
+            <div id="ch-pod-coef" class="chart short" role="img" aria-label="Each car's coefficients on the first two POD shapes"></div>
+          </figure>
+        </div>
+      </article>
+
+      <article id="m-disc" class="module">
+        <div class="mod-text">
+          <p class="label">05 | Discrepancy model</p>
+          <h3>Mapping where the physics is wrong</h3>
+          <p>What the simulator misses isn't random. It comes in runs through whole corners and braking zones. A Gaussian process maps that error along the lap, which shows where a point-mass model falls short and by how much.</p>
+          <dl class="dl-figs" id="disc-dl"></dl>
+          <p class="note">The band includes measurement noise, so it's a predictive band, not only the uncertainty of the curve.</p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Measured minus simulated speed</strong> <span data-fill="disc_sub"></span></figcaption>
+          <div id="ch-disc" class="chart" role="img" aria-label="Discrepancy between measured and simulated speed along the lap"></div>
+        </figure>
+      </article>
+
+      <article id="m-hybrid" class="module flip">
+        <div class="mod-text">
+          <p class="label">06 | Hybrid model</p>
+          <h3>Physics first, machine learning on what's left</h3>
+          <p data-fill="corner_text"></p>
+          <dl class="dl-figs" id="hyb-dl"></dl>
+          <p class="note" data-fill="hyb_note"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>R² on circuits the model never saw</strong> <span data-fill="r2_sub"></span></figcaption>
+          <div id="ch-r2" class="chart short" role="img" aria-label="R squared of each corner-speed model on held-out circuits"></div>
+        </figure>
+        <div class="table-wrap mod-wide"><table class="data" id="tbl-cm"></table></div>
+      </article>
+    </div>
+  </section>
+
+  <section id="data" class="band mist">
+    <div class="wrap section">
+      <div class="sec-head">
+        <p class="label">The data</p>
+        <h2>How I handled the data</h2>
+        <p class="lede-sm">The archive is public and free, but it isn't clean. These are the problems I found in it, how each one is caught, and what the pipeline does about it.</p>
+      </div>
+      <ol class="issues" id="issues"></ol>
+      <div class="ev split data-foot">
+        <figure class="fig">
+          <figcaption><strong>Laps rejected by each check</strong> <span data-fill="checks_sub"></span></figcaption>
+          <div id="ch-checks" class="chart" role="img" aria-label="Laps rejected by each data check"></div>
+        </figure>
+        <div class="ev-text">
+          <h3>Events left out</h3>
+          <ul class="small" id="skipped"></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tracks" class="band paper">
+    <div class="wrap section">
+      <div class="sec-head">
+        <p class="label">Explore | Track by track</p>
+        <h2>Every track, with your filters</h2>
+        <p class="scope" data-scope="tracks"></p>
+      </div>
+      <p class="note how">Use the bar at the top to pick the season, the Aston Martin drivers and the tracks. Every section says which of those choices it follows.</p>
+      <div class="prose"><p data-fill="tracks_text"></p></div>
+      <div class="figs" id="trk-tiles"></div>
+      <figure class="fig">
+        <figcaption><strong>Qualifying gap to the fastest lap, by track</strong> <span>%, each driver's fastest lap, grey band = middle half of the other teams</span></figcaption>
+        <div id="ch-trk-gap" class="chart" role="img" aria-label="Qualifying gap of each Aston Martin driver at each selected track"></div>
+      </figure>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Loss rate on straights against corners, selected tracks</strong> <span>% of the reference lap's time in each, every team summed over the selected tracks where both its lap and the Aston Martin lap passed the data checks, point estimates</span></figcaption>
+          <div id="ch-trk-rates" class="chart square" role="img" aria-label="Straight and corner loss rates over the selected tracks"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Loss rate by section and track</strong> <span>% of the reference lap's time in that section, brick = lost, slate = gained, blank = no lap that passed the data checks</span></figcaption>
+          <div id="ch-trk-heat" class="chart square" role="img" aria-label="Heatmap of loss rate by section and track"></div>
+        </figure>
+      </div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Corner minimum speed against the other teams</strong> <span>km/h, mean over corners where the speed channel agrees with GPS</span></figcaption>
+          <div id="ch-trk-corners" class="chart short" role="img" aria-label="Corner minimum speed against the other teams by corner class"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Speed on the straights against the other teams</strong> <span data-fill="trk_straights_sub"></span></figcaption>
+          <div id="ch-trk-straights" class="chart short" role="img" aria-label="Straight-line speeds against the other teams"></div>
+        </figure>
+      </div>
+      <div class="table-wrap"><table class="data clickable" id="tbl-tracks"></table></div>
+    </div>
+  </section>
+
+  <section id="detail" class="band mist">
+    <div class="wrap section">
+      <div class="sec-head">
+        <p class="label">Explore | Track detail</p>
+        <h2>One track, lap against lap</h2>
+        <p class="scope" data-scope="detail"></p>
+      </div>
+      <div class="controls">
+        <label for="sel-track">Track</label>
+        <select id="sel-track"></select>
+        <span class="hint" id="trk-hint"></span>
+      </div>
+      <div class="prose"><p data-fill="detail_text"></p></div>
+      <div class="figs" id="det-tiles"></div>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Qualifying order</strong> <span>each team's fastest lap, gap to the fastest lap, s</span></figcaption>
+          <div id="ch-order" class="chart tall" role="img" aria-label="Gap to the fastest lap for every team"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Where the gap to the team ahead is</strong> <span id="rival-sub"></span></figcaption>
+          <div id="ch-rival" class="chart tall" role="img" aria-label="Section by section difference to the team directly ahead"></div>
+        </figure>
+      </div>
+      <figure class="fig">
+        <figcaption><strong>Speed and running gap to the reference lap</strong> <span id="speed-sub"></span></figcaption>
+        <div id="ch-speed" class="chart tall" role="img" aria-label="Speed traces"></div>
+        <div id="ch-delta" class="chart short" role="img" aria-label="Running gap to the reference lap"></div>
+      </figure>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Where the time goes</strong> <span id="map-sub"></span></figcaption>
+          <div class="seg" id="seg-map" role="group" aria-label="Driver shown on the map"></div>
+          <div id="ch-map" class="chart square" role="img" aria-label="Track map coloured by time lost"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Loss rate on straights against corners at this track</strong> <span>every team's fastest passing lap, % of the reference lap's time in each</span></figcaption>
+          <div id="ch-det-rates" class="chart square" role="img" aria-label="Loss rates of every team at this track"></div>
+        </figure>
+      </div>
+      <figure class="fig">
+        <figcaption><strong>Time lost at each corner</strong> <span>s against the reference lap, from up to <span data-fill="corner_window"></span> before to <span data-fill="corner_window"></span> after each corner; corners closer together split the distance between them</span></figcaption>
+        <div id="ch-corners" class="chart" role="img" aria-label="Time lost at each corner"></div>
+        <div class="table-wrap compact"><table class="data" id="tbl-corners"></table></div>
+      </figure>
+      <div class="grid2">
+        <figure class="fig">
+          <figcaption><strong>Speed along the straight</strong> <span id="straight-sub"></span></figcaption>
+          <div class="seg" id="seg-straight" role="group" aria-label="Straight shown"></div>
+          <div id="ch-straight" class="chart" role="img" aria-label="Speed along the selected straight"></div>
+        </figure>
+        <figure class="fig">
+          <figcaption><strong>Speed lost at full throttle</strong> <span>km/h below the running peak while flat out, grey = other teams</span></figcaption>
+          <div id="ch-ftl" class="chart" role="img" aria-label="Speed lost at full throttle on each straight"></div>
+        </figure>
+      </div>
+      <figure class="fig" id="det-race-fig">
+        <figcaption><strong>Race pace at this track</strong> <span>gap to the fastest team, s per lap, corrected for fuel and tyres, <span data-fill="lvl"></span> interval</span></figcaption>
+        <div id="ch-det-race" class="chart" role="img" aria-label="Race pace gap per team at this track"></div>
+      </figure>
+      <ul class="note notes" id="det-notes"></ul>
+    </div>
+  </section>
+
+  <section id="checks" class="band night">
+    <div class="wrap section">
+      <div class="sec-head">
+        <p class="label">Checks</p>
+        <h2>How I know the methods work</h2>
+        <p class="scope" data-scope="checks"></p>
+        <p class="lede-sm" data-fill="stats_lede"></p>
+      </div>
+      <div class="big-figs" id="check-figs"></div>
+      <h3 class="h-review">The statistics behind every interval</h3>
+      <div class="table-wrap"><table class="stats" id="tbl-stats"></table></div>
+      <div class="ev split wind">
+        <div class="ev-text">
+          <h3>Wind, tested and left out</h3>
+          <p data-fill="wind_text"></p>
+        </div>
+        <figure class="fig">
+          <figcaption><strong>Can the wind correction be trusted?</strong> <span>fit residual against ground speed when the wind direction is rotated, mean over windy sessions</span></figcaption>
+          <div id="ch-wind" class="chart short" role="img" aria-label="Wind frame rotation test"></div>
+        </figure>
+      </div>
+      <h3 class="h-review">What didn't survive review</h3>
+      <ul class="review" id="review"></ul>
+    </div>
+  </section>
+
+  <section id="method" class="band paper">
+    <div class="wrap section">
+      <div class="sec-head">
+        <p class="label">Limits</p>
+        <h2>What this can't tell you</h2>
+      </div>
+      <div class="limits">
+        <div>
+          <h3>What public data can't tell</h3>
+          <p>Whether the straight-line loss comes from power, drag or the way the battery is used.</p>
+          <p>Absolute grip or downforce. Every physical number here is an effective value for a simplified car.</p>
+          <p data-fill="limits_did"></p>
+        </div>
+        <div>
+          <h3>What team data would add</h3>
+          <p>ERS state of charge and deployment would split the straight-line loss into engine output, deployment and drag.</p>
+          <p>Ride heights and wind-tunnel maps would turn the grip line into a track-to-tunnel correlation check.</p>
+          <p>Tyre temperatures and pressures would replace effective grip with a tyre model.</p>
+        </div>
+      </div>
+      <div class="method-block">
+        <p class="label">Method</p>
+        <div class="prose" data-fill="method_html"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer band night" id="author" tabindex="-1" aria-labelledby="author-name">
+  <div class="wrap">
+    <div class="author">
+      <div class="author-id">
+        <p class="label">About the author</p>
+        <h2 class="author-name" id="author-name">Balaji Murugan</h2>
+        <p class="author-degree">MSc Artificial Intelligence, University of Surrey</p>
+        <p class="author-line">Built as an independent project for the Graduate Data Scientist (Vehicle Science) application.</p>
+      </div>
+      <dl class="author-dl">
+        <div>
+          <dt>Email</dt>
+          <dd class="contact"><a class="addr" href="mailto:thebm.theory@gmail.com">thebm.theory@gmail.com</a><button type="button" class="copy" data-copy="thebm.theory@gmail.com" aria-label="Copy email address" aria-live="polite">Copy</button></dd>
+        </div>
+        <div>
+          <dt>Phone</dt>
+          <dd class="contact"><a class="addr" href="tel:+447810817440">+44 7810 817440</a><button type="button" class="copy" data-copy="+44 7810 817440" aria-label="Copy phone number" aria-live="polite">Copy</button></dd>
+        </div>
+        <div>
+          <dt>GitHub</dt>
+          <dd class="contact"><a class="addr" href="https://github.com/thebmtheory/amr-aerotwin" rel="noopener">thebmtheory/amr-aerotwin</a></dd>
+        </div>
+        <div>
+          <dt>Built with</dt>
+          <dd>Python (NumPy, pandas, SciPy and scikit-learn) for the data pipeline, the lap simulator and the models. This page is plain JavaScript with Plotly charts and runs its own copy of the lap simulator for the sandbox; a test checks that the two agree.</dd>
+        </div>
+      </dl>
+    </div>
+    <div class="colophon">
+      <a class="brand" href="#top"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 10h10.5l4.3 12.2c.6 1.7 3 1.8 3.7.1L29 11.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="brand-name">AMR Analysis</span></a>
+      <div class="foot-text">
+        <p>An independent analysis of public Formula 1 timing data. Not affiliated with or endorsed by Aston Martin Aramco Formula One Team or Formula 1.</p>
+        <p class="small">Data: the public <a href="https://github.com/TracingInsights" rel="noopener">TracingInsights</a> archive of F1 live timing. Regulation figures and upgrade lists: FIA Technical Regulations and FIA Car Presentation Submissions (links in the repository). The results on this page are filled in from the analysis files when the page is built and opened, not typed in.</p>
+      </div>
+      <a class="go up" href="#top">Back to the top<svg width="12" height="18" viewBox="0 0 12 18" fill="none" aria-hidden="true"><path d="M6 18V2M1 7l5-5 5 5" stroke="currentColor" stroke-width="1.5"/></svg></a>
+    </div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="data/season.js"></script>
+<script src="data/explorer/index.js"></script>
+<script src="lapsim.js?v=8d95e191"></script>
+<script src="trackmath.js?v=e85e1eb9"></script>
+<script src="app.js?v=3c2186d4"></script>
+
+</body>
+</html>
