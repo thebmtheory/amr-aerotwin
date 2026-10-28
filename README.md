@@ -1,4 +1,6 @@
-# Track Science: where Aston Martin loses time
+# AMR Analysis: where Aston Martin loses time
+
+By Balaji Murugan. Built as an independent project for the Graduate Data Scientist (Vehicle Science) application.
 
 Physics-first analysis of public Formula 1 timing data: where the Aston Martin loses lap
 time, why, and what each fix would be worth. It covers every Grand Prix of 2025 and 2026 so
@@ -7,13 +9,19 @@ validated out of sample, and an interactive report.
 
 **Read first:** the [technical note](docs/technical_note.md), regenerated from the results on every run, and the report (`make report && make serve`, then open <http://localhost:8765>).
 
-**The report** is one page. A bar at the top switches between the 2025 and 2026 seasons and has multi-select dropdowns for the Aston Martin drivers and the tracks. The season findings come first, then a track-by-track view of the selected tracks (qualifying gaps, loss rates against every team, corner and straight-line speeds, race pace) and a track detail for any one of them (qualifying order, where the gap to the team ahead is, speed traces, a track map of time lost, every corner and straight). Each section says which of the filters it follows.
+**The report** is one page in four parts:
+- **What I found:** the findings, each with the method behind it, and the evidence for each.
+- **How I did it:** the pipeline in six steps, then the physics and data-science models one by one.
+- **How I handled the data:** the problems in the raw archive and how each is caught.
+- **Explore:** a track-by-track view of the selected tracks (qualifying gaps, loss rates against every team, corner and straight-line speeds, race pace) and a track detail for any one of them (qualifying order, where the gap to the team ahead is, speed traces, a track map of time lost, every corner and straight).
+
+The checks on the methods and the limits of public data close the page. A bar at the top switches between the 2025 and 2026 seasons and has multi-select dropdowns for the Aston Martin drivers and the tracks. Each section says which of the filters it follows.
 
 ## Main findings
 
 <!-- findings:start -->
 - **In 2026 Aston Martin loses time on the straights at about twice the rate of any other team.** Measured as time lost to the pole lap per second spent in each part of the lap, it loses 4.0% on the straights. On the same 11 tracks no other team loses more than 2.0% (Cadillac, 3.99% off pole over a lap against Aston Martin's 4.15%): 2.0 times as much, 90% interval 1.7 to 2.5. Every other team more than 1% off pole loses less per second on the straights than in the corners (ratios 0.27 to 0.68, against 0.94 for Aston Martin), as did Aston Martin in 2025 (0.19).
-- **The straight-line loss starts at the corner exit and grows along the straight.** On the main straights the car starts 5.2 km/h down, where no other team is more than 4.0 km/h off the field, loses 2.8 km/h over the first half and 3.4 km/h more in the second half (90% interval 1.9 to 5.0), at full throttle, on 8 of 10 main straights at 7 events; the next largest late loss is McLaren's (2.0 km/h). Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.
+- **The straight-line loss starts at the corner exit and grows along the straight.** On the main straights the car starts 5.2 km/h down, where the next largest gap is Cadillac's, 4.0 km/h, loses 2.8 km/h over the first half and 3.4 km/h more in the second half (90% interval 1.9 to 5.0), at full throttle, on 8 of 10 main straights at 7 events; the next largest late loss is McLaren's (2.0 km/h). Extra drag, deployment ending earlier and harvesting at full throttle all fit that shape; public timing data cannot tell them apart.
 - **The teams decide the 2026 qualifying order:** between-team differences (car and driver line-up together) explain 90% (90% interval 83 to 94) of the variance in qualifying gaps, against 48% in 2025.
 - **What did not survive review is withdrawn, not hidden.** An early 36 kW power-deficit claim (an artefact of road gradient and unlike-for-like comparison), a "slow corners are the biggest loss" claim (cars simply spend most time there) and two wind claims (wind data proved uninformative) are documented as withdrawn in the technical note.
 <!-- findings:end -->

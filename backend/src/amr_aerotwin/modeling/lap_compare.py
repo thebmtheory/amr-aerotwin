@@ -1,9 +1,7 @@
-"""Where one lap gains or loses time against another, by corner phase and corner class.
+"""Where one lap gains or loses time against another, by corner phase and corner speed class.
 
-The time delta comes from the measured timing channel on a shared distance grid, so the
-corner and straight contributions add up to the official lap-time gap exactly. That
-additivity is bookkeeping, not validation; the validation of the alignment itself is in
-`AlignedLap.quality`.
+Losses come from the timing channel on a shared distance grid, so they add up to the official lap-time gap
+by construction. That is bookkeeping, not validation: the alignment is checked in `AlignedLap.quality`.
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ EXIT_M = (20.0, 120.0)
 @dataclass(frozen=True)
 class LapComparison:
     distance_m: NDArray[np.float64]
-    delta_s: NDArray[np.float64]  # time gap at each grid point (target - reference), + = target slower
+    delta_s: NDArray[np.float64]  # gap at each grid point (s), target minus reference; positive = target slower
     corner_table: pd.DataFrame
     class_summary: pd.DataFrame
     straight_loss_s: float
@@ -61,7 +59,7 @@ def compare_laps(
     corner_distance_m: NDArray[np.float64],
     corner_labels: list[str],
 ) -> LapComparison:
-    """Split the lap-time gap into entry / apex / exit phases of each corner, plus straights."""
+    """Lap-time gap split into the entry, apex and exit of each corner, plus the straights."""
     s = target.distance_m
     length = target.lap_length_m
     cell = segment_time_loss(target, reference)
@@ -113,7 +111,7 @@ def compare_laps(
         ignore_index=True,
     )
     # Loss as a share of the time the reference spends there: a uniform percentage deficit
-    # gives equal rates everywhere, so rates (not seconds) show where a car is weak.
+    # gives equal rates everywhere, so rates (not seconds) show where a car is weak
     summary["loss_rate_pct"] = 100 * summary["time_s"] / summary["reference_time_s"].replace(0, np.nan)
     return LapComparison(
         distance_m=s,

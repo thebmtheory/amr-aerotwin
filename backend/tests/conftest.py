@@ -50,13 +50,10 @@ def circle_lap_telemetry(
     clock_offset_s: float = 0.0,
     seed: int = 0,
 ) -> tuple[dict, float]:
-    """Raw-archive-format telemetry for one lap of a circle at constant speed.
+    """Raw telemetry in the archive's format for one lap of a circle; returns (raw dict, lap time).
 
-    Positions are whole decimetres at GPS fixes and linearly interpolated in between, as in
-    the TracingInsights archive. `gps_lag_s` delays the GPS stream relative to car data.
-    `clock_offset_s` shifts the lap's time origin for both streams, as the archive does: the
-    car crossed the line that long before telemetry time 0 (the odometer still starts at 0).
-    Returns (raw dict, lap time).
+    As in the TracingInsights archive, positions are whole decimetres at GPS fixes and interpolated in between, and
+    `clock_offset_s` starts both streams that long after the line crossing, though the odometer still starts at 0.
     """
     rng = np.random.default_rng(seed)
     period = 7.0

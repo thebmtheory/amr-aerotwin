@@ -18,9 +18,19 @@ def test_event_summary_is_json_serialisable_and_complete(silverstone):
     from amr_aerotwin.pipeline.event import _r
 
     json.dumps(_r(s, 6), allow_nan=False)  # what the build writes: strict JSON
-    for key in ("comparison", "lapsim", "pod", "energy", "map", "corners", "team_table", "data_checks", "sandbox"):
+    for key in ("comparison", "lapsim", "pod", "energy", "map", "corners", "team_table", "data_checks", "sandbox", "surrogate"):
         assert key in s, key
     assert s["geometry_ok"] and abs(abs(s["turning_number"]) - 1) < 0.035
+
+
+def test_lap_time_emulator_on_the_calibrated_real_car(silverstone):
+    """The emulator runs on the what-if car (DRS era: the low-drag CdA scales with CdA) and beats the linear surrogate."""
+    sg = silverstone.summary["surrogate"]
+    assert sg["car"] == silverstone.summary["iso_lap_time"]["car"] == silverstone.summary["sandbox"]["car"]
+    assert silverstone.summary["sandbox"]["params"]["low_drag_cda_m2"] is not None
+    assert sg["rmse_s"] < 0.05 * sg["spread_s"] and sg["rmse_s"] < sg["linear_rmse_s"]
+    assert all(len(sg[k]) == sg["n_test"] for k in ("test_sim_s", "test_gp_s", "test_gp_sd_s", "test_linear_s", "test_factors"))
+    assert not any("emulator" in w for w in silverstone.summary["warnings"])
 
 
 def test_comparison_closes_on_the_official_gap(silverstone):
@@ -79,22 +89,21 @@ def test_timing_table_keeps_every_driver_even_without_telemetry(silverstone, fix
     laps = fixture_repo.session_laps(2025, "British Grand Prix", "Qualifying")
     expected = {d for d in laps["drv"].dropna().unique() if fastest_valid_lap(laps, d) is not None}
     assert set(silverstone.timing_rows["driver"]) == expected
-    # the fastest timed lap is the reference for gaps, whatever happened to telemetry
+    # The fastest timed lap is the reference for gaps, whatever happened to telemetry
     assert silverstone.timing_rows["lap_time_s"].min() == pytest.approx(laps.loc[~laps["del"], "time"].min())
 
 
 def test_wind_rotation_test_output_shape(silverstone):
     wt = silverstone.summary["wind_rotation_test"]
-    if wt is None:  # calm session: the test is skipped by design
-        return
+    if wt is None:
+        pytest.skip("calm session: the wind test only runs above 2 m/s")
     rel = wt["relative_sse"]
     assert len(rel) == 12 and all(v > 0 for v in rel.values())
     assert wt["best_rotation_deg"] in {int(k) for k in rel}
 
 
 def test_section_rates_recover_known_rates_and_target_ratio():
-    """Synthetic events with known loss rates: rates are recovered, a uniform deficit gives a
-    straights/corners ratio of 1, and the target-vs-field ratio interval covers the truth."""
+    """Known loss rates and ratios are recovered, and the target-vs-field interval covers the true ratio."""
     import pandas as pd
     from amr_aerotwin.pipeline.season import section_rate_summary
 

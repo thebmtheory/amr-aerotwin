@@ -1,8 +1,9 @@
-"""Shared data contracts, physical constants and per-season regulation assumptions (SI units)."""
+"""Shared dataclasses, physical constants and per-season regulation assumptions (SI units)."""
 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +17,7 @@ KELVIN_OFFSET: float = 273.15
 GRAVITY_ACCEL: float = 9.80665  # m / s^2
 
 TARGET_TEAM = "Aston Martin"
+REPRESENTATIVE_LAP_RATIO = 1.07  # FIA 107% rule: a slower qualifying lap is not representative pace
 
 # Data lives under ./data (or $AEROTWIN_DATA), not inside the installed package
 DATA_DIR = Path(os.environ.get("AEROTWIN_DATA", Path.cwd() / "data")).resolve()
@@ -61,7 +63,7 @@ def mgu_k_power_limit_kw(speed_kmh: np.ndarray, season: int) -> np.ndarray:
     """Regulated maximum MGU-K power (kW) vs speed, without Overtake Mode.
 
     2026 (Section C Art. C5.2.8): 350 kW up to 290 km/h, then 1800 - 5 v up to 340 km/h
-    (100 kW at 340), then falling linearly to 0 at 345 km/h. Earlier seasons: flat 120 kW.
+    (100 kW at 340), then falling linearly to 0 at 345 km/h. Before 2026: flat 120 kW.
     """
     v = np.asarray(speed_kmh, dtype=float)
     if season >= 2026:
@@ -147,3 +149,8 @@ class AlignedLap:
     @property
     def grid_step_m(self) -> float:
         return float(self.distance_m[1] - self.distance_m[0])
+
+
+def slug(text: str) -> str:
+    """Event name as a file-name key, e.g. "British Grand Prix" -> "british-grand-prix"."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")

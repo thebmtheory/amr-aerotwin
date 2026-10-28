@@ -1,4 +1,4 @@
-"""Grip-vs-q and drag/power estimators recover known values."""
+"""Grip-vs-q fit: recovers a known line and uses only corners at the grip limit."""
 
 import numpy as np
 import pandas as pd

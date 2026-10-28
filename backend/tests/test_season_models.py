@@ -71,7 +71,7 @@ def test_model_averaged_step_includes_the_no_change_possibility():
     y = np.concatenate([np.full(9, 1.3), np.full(9, 1.05)]) + rng.normal(0, 0.15, 18)  # a small, uncertain step
     cp = bayesian_changepoint(y)
     w0 = cp.p_no_change
-    # Averaging over "no change" shrinks the step toward zero by about P(no change)
+    # Averaging over "no change" shrinks the step towards zero by about P(no change)
     assert abs(cp.effect_avg_pct) < abs(cp.effect_mean_pct)
     assert cp.effect_avg_pct == pytest.approx((1 - w0) * cp.effect_mean_pct, abs=0.03)
     assert cp.effect_avg_ci90_pct[1] >= cp.effect_ci90_pct[1] - 1e-9

@@ -1,32 +1,14 @@
-"""Straight-line performance: joint estimate of power and drag differences between cars.
+"""Straight-line power and drag differences between cars, from m (a_x + g grade + g Crr) = P / v - q CdA.
 
-On a straight at full throttle, with gravity removed using the road gradient,
-
-    m (a_x + g * grade + g * Crr) = P / v - q * CdA
-
-so each car's samples give a regression for (P, CdA). Power and drag are strongly
-collinear over the speed range of one straight (both terms fall with speed), which is why
-this module reports their *joint* uncertainty instead of claiming one or the other.
-
-Design choices (each guards against a specific bias found in review):
-- Gravity is removed with the GPS-altitude gradient (Spa's Kemmel straight climbs ~4%).
-- Only the acceleration phase of each straight is used: from the straight's start to the
-  position where the *field-median* speed peaks. The cut is positional, not based on a
-  car's own acceleration, so energy clipping (deceleration at full throttle late on a
-  2026 straight) is excluded without selecting on the outcome.
-- Samples within 150 m of the car ahead are dropped (slipstream lowers drag).
-- In 2026 only speeds below 285 km/h are used, under the regulated MGU-K taper.
-- A team is compared with the median of the *other* teams at the same event.
-- Uncertainty is an event-level bootstrap of the joint (dP, dCdA) estimate.
-
-The power here is *deployed* wheel power: it includes energy-management strategy, not only
-the power unit's output.
+Power and drag are collinear over one straight (both terms fall with speed), so their differences are
+reported jointly. P is deployed wheel power, so it includes energy management as well as the power unit.
 """
 
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -35,20 +17,27 @@ from numpy.typing import NDArray
 from amr_aerotwin.domain import GRAVITY_ACCEL
 from amr_aerotwin.modeling.intervals import boot_ci
 from amr_aerotwin.physics.dynamics import VehicleState
-from amr_aerotwin.physics.vehicle_params import CRR, straight_segments
+from amr_aerotwin.physics.kinematics import decompose_aero_wind_vectors
+from amr_aerotwin.physics.lapsim import CRR
+from amr_aerotwin.physics.vehicle_params import straight_segments
 
-TOW_GAP_M = 150.0
+TOW_GAP_M = 150.0  # closer to the car ahead, its slipstream lowers drag
 MIN_SPEED_KMH = 150.0
 MIN_FIT_POSITIONS = 40  # 200 m of straight
 MIN_FIT_SPEED_SPAN_KMH = 60.0
 
 
 def max_fit_speed_kmh(season: int) -> float:
+    """Highest speed used in the fits (km/h); from 2026, below the regulated MGU-K taper."""
     return 285.0 if season >= 2026 else 330.0
 
 
 def acceleration_phase_mask(states: list[VehicleState], ref: VehicleState) -> NDArray[np.bool_]:
-    """Grid positions on the acceleration phase of each straight (positional, same for all cars)."""
+    """Grid positions on the acceleration phase of each straight (positional, same for all cars).
+
+    Each phase ends where the field-median speed peaks, so late clipping is left out without selecting on a
+    car's own acceleration.
+    """
     n = len(ref.distance_m)
     mask = np.zeros(n, dtype=bool)
     v_field = np.median(np.vstack([s.speed_smooth_ms for s in states]), axis=0)
@@ -154,7 +143,7 @@ class JointDeficit:
     matched_kw: float
     matched_ci90: tuple[float, float]
     n_events: int
-    draws: NDArray[np.float64]  # bootstrap draws of the mean (dP kW, dCdA m^2)
+    draws: NDArray[np.float64]  # bootstrap draws of the median (dP kW, dCdA m^2)
     per_event: pd.DataFrame
 
 
@@ -178,9 +167,10 @@ def per_event_deltas(rows: pd.DataFrame, team: str) -> pd.DataFrame:
 
 def joint_deficit(rows: pd.DataFrame, team: str, n_boot: int = 2000, seed: int = 0,
                   exclude_round: int | None = None) -> JointDeficit | None:
-    """Event-bootstrap of the median (dP, dCdA) of `team` vs the field, for one season of rows.
+    """Median over events of `team` minus the field in P (kW) and CdA (m^2), with event-bootstrap intervals.
 
-    Medians, because single-event fits of two collinear terms can be wild."""
+    Medians, because single-event fits of two collinear terms can be far off. None below 4 events.
+    """
     pe = per_event_deltas(rows, team)
     if exclude_round is not None and not pe.empty:
         pe = pe[pe["round"] != exclude_round]
@@ -208,17 +198,12 @@ WIND_TEST_ANGLES = tuple(range(0, 360, 30))
 
 
 def wind_rotation_test(states: dict[str, VehicleState], ref: VehicleState, min_wind_ms: float = 2.0) -> dict | None:
-    """Check whether the wind correction helps explain full-throttle acceleration.
+    """Residual sum of squares of the (P, CdA) fits with airspeed, relative to ground speed, per wind rotation.
 
-    Wind components need the compass orientation of the timing X/Y frame. If the assumed
-    orientation (X = East, Y = North) is right, using airspeed instead of ground speed in
-    the drag term should reduce the residual of the (P, CdA) fits, and rotating the wind by
-    any other angle should do worse. Returns the residual sum of squares relative to the
-    ground-speed fit for each rotation, or None when the session was nearly calm.
+    Tests the assumed timing-frame orientation (X = East, Y = North): if it is right, rotation 0 fits best
+    and beats ground speed. None when the session was nearly calm.
     """
-    from dataclasses import replace
 
-    from amr_aerotwin.physics.kinematics import decompose_aero_wind_vectors
 
     wind = float(np.median([s.lap.ambient.wind_speed_ms for s in states.values()]))
     if wind < min_wind_ms:
@@ -228,7 +213,7 @@ def wind_rotation_test(states: dict[str, VehicleState], ref: VehicleState, min_w
     for st in states.values():
         by_team.setdefault(st.lap.meta.team, []).append(st)
 
-    def sse(q_of: object) -> float:
+    def sse(q_of: Callable[[VehicleState], NDArray[np.float64]]) -> float:
         total = 0.0
         for sts in by_team.values():
             xs, ys = [], []
@@ -238,7 +223,7 @@ def wind_rotation_test(states: dict[str, VehicleState], ref: VehicleState, min_w
                     continue
                 v = st.speed_smooth_ms[sel]
                 ys.append(st.mass_kg * (st.ax_propulsive_ms2[sel] + GRAVITY_ACCEL * CRR))
-                xs.append(np.column_stack([1.0 / v, -q_of(st)[sel]]))  # type: ignore[operator]
+                xs.append(np.column_stack([1.0 / v, -q_of(st)[sel]]))
             if xs:
                 x, y = np.vstack(xs), np.concatenate(ys)
                 beta = np.linalg.lstsq(x, y, rcond=None)[0]

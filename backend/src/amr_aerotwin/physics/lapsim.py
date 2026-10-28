@@ -1,22 +1,8 @@
-"""Quasi-steady-state (QSS) point-mass lap-time simulator.
+"""Quasi-steady-state (QSS) point-mass lap-time simulator on a fixed path of curvature kappa(s).
 
-The car is a point mass on a fixed path with curvature kappa(s). At every point the tyres
-can deliver a lateral acceleration of
-
-    a_grip(v) = mu * (g + q(v) * ClA / m),       q = 0.5 * rho * v^2
-
-and a longitudinal acceleration of `long_grip_scale * a_grip(v)`, combined on a friction
-ellipse (a_x / (k a_grip))^2 + (a_y / a_grip)^2 <= 1. The solver:
-
-1. Corner limit: v_max(s) where v^2 |kappa| = a_grip(v), solved in closed form.
-2. Forward pass (acceleration): min(remaining grip, P / (m v)) minus drag and rolling loss.
-3. Backward pass (braking): remaining grip plus drag and rolling loss.
-4. Speed = min of the three; the lap is closed by simulating two laps and keeping the
-   converged copy, so the start speed matches the end speed.
-
-This is the standard first model used for lap-time sensitivities: it ignores load transfer,
-tyre load sensitivity, gear ratios and driver behaviour, which is exactly what the
-calibration discrepancy term in `modeling/calibration.py` is there to expose.
+Grip is mu (g + q ClA / m) with q = 0.5 rho v^2, on a friction ellipse whose longitudinal axis is
+`long_grip_scale` times the lateral. Load transfer, tyre load sensitivity, gears and driver behaviour are
+ignored; the discrepancy GP in modeling/calibration.py shows where that matters.
 """
 
 from __future__ import annotations
@@ -36,6 +22,9 @@ LIMIT_ACCEL = 1
 LIMIT_BRAKE = 2
 
 
+CRR = 0.012  # rolling-resistance coefficient
+
+
 @dataclass(frozen=True)
 class VehicleParams:
     """Lumped car parameters for the point-mass model (SI)."""
@@ -46,7 +35,7 @@ class VehicleParams:
     mu: float
     power_w: float
     rho_kg_m3: float = 1.20
-    crr: float = 0.012
+    crr: float = CRR
     low_drag_cda_m2: float | None = None  # CdA with DRS / straight-line mode open
     long_grip_scale: float = 1.0  # longitudinal / lateral friction ratio (friction ellipse)
 
@@ -67,7 +56,7 @@ class LapSimResult:
 
 
 def max_cornering_speed(kappa: NDArray[np.float64], p: VehicleParams) -> NDArray[np.float64]:
-    """Steady-state cornering speed: v^2 |k| = mu (g + rho v^2 ClA / (2 m)).
+    """Steady-state cornering speed (m/s): v^2 |k| = mu (g + rho v^2 ClA / (2 m)).
 
     Rearranged: v^2 = mu g / (|k| - mu rho ClA / (2 m)). When the denominator is <= 0, aero
     grip grows faster than the lateral demand and the corner is not grip-limited.
@@ -86,6 +75,7 @@ def _passes(
     ds: float,
     p: VehicleParams,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Forward (acceleration) and backward (braking) speed traces (m/s), each capped at the apex speed."""
     n = len(kappa)
     m, g, mu, rho, cla, kx = p.mass_kg, GRAVITY_ACCEL, p.mu, p.rho_kg_m3, p.cla_m2, p.long_grip_scale
     k_abs = np.abs(kappa).tolist()
@@ -143,6 +133,7 @@ def simulate_lap(
     v_apex = max_cornering_speed(kappa, p)
 
     if closed:
+        # Simulate two laps and keep the converged copy of each pass, so the start speed matches the end speed
         k2, c2, va2 = np.tile(kappa, 2), np.tile(cda, 2), np.tile(v_apex, 2)
         fwd2, bwd2 = _passes(k2, c2, va2, ds, p)
         fwd, bwd = fwd2[n:], bwd2[:n]

@@ -10,15 +10,15 @@ from scipy.signal import savgol_filter
 
 from amr_aerotwin.domain import GRAVITY_ACCEL, AlignedLap, regulations_for
 from amr_aerotwin.physics.kinematics import (
+    GPS_LAM,
+    MIN_GPS_FIXES,
     compute_air_density_kg_m3,
     decompose_aero_wind_vectors,
     gps_spline_kinematics,
+    odd_window,
     path_curvature,
     turning_number,
 )
-
-MIN_GPS_FIXES = 50
-GPS_SPLINE_LAM = 0.2  # default time-smoothing penalty (events re-select it, see kinematics)
 
 STRAIGHT = "STRAIGHT"
 BRAKING = "BRAKING"
@@ -28,7 +28,7 @@ HIGH_SPEED_CORNER = "HIGH_SPEED_CORNER"
 TRANSITION = "TRANSITION"
 REGIMES = (STRAIGHT, BRAKING, LOW_SPEED_CORNER, MEDIUM_SPEED_CORNER, HIGH_SPEED_CORNER, TRANSITION)
 
-# Corner speed classes (km/h) used throughout the project
+# Corner speed classes (km/h) and regime thresholds on lateral acceleration (g)
 LOW_SPEED_MAX_KMH = 150.0
 HIGH_SPEED_MIN_KMH = 230.0
 CORNER_MIN_LAT_G = 1.5
@@ -71,9 +71,11 @@ class VehicleState:
 
 
 def smooth_speed(speed_ms: NDArray[np.float64], step_m: float, window_m: float = 25.0) -> NDArray[np.float64]:
-    """Savitzky-Golay smoothing of speed. Not periodic: a qualifying lap starts at the end of
-    the out-lap, so speed at the start line can differ from speed at the finish by 15+ km/h."""
-    w = max(5, int(round(window_m / step_m)) | 1)
+    """Speed (m/s) after Savitzky-Golay smoothing over `window_m`, not wrapped across the line.
+
+    A qualifying lap starts at the end of the out-lap, so start and finish speeds can differ by 15+ km/h.
+    """
+    w = odd_window(window_m, step_m)
     return savgol_filter(speed_ms, w, 2, mode="interp")
 
 
@@ -88,7 +90,7 @@ def track_grade(z_m: NDArray[np.float64], step_m: float, window_m: float = 150.0
     Altitude is quantised to 0.1 m and noisy, so only the long-wavelength slope is kept.
     A 4% climb (Spa's Kemmel straight) costs 0.4 m/s^2, about 30 kW at 300 km/h.
     """
-    w = max(5, int(round(window_m / step_m)) | 1)
+    w = odd_window(window_m, step_m)
     zs = savgol_filter(z_m, w, 2, mode="wrap")
     return (np.roll(zs, -1) - np.roll(zs, 1)) / (2.0 * step_m)
 
@@ -125,14 +127,14 @@ def vehicle_mass_kg(season: int, fuel_kg: float | None = None, qualifying: bool 
 
 
 def lap_curvature(
-    lap: AlignedLap, lam: float = GPS_SPLINE_LAM, curvature_window_m: float = 55.0
+    lap: AlignedLap, lam: float = GPS_LAM, curvature_window_m: float = 55.0
 ) -> NDArray[np.float64]:
     """Curvature of one lap from its raw GPS fixes (time-domain spline), else smoothed X/Y."""
     if len(lap.gps_time_s) >= MIN_GPS_FIXES:
         kappa, _ = gps_spline_kinematics(
             lap.gps_time_s, lap.gps_x_m, lap.gps_y_m, lap.meta.lap_time_s, lap.time_s, lam
         )
-        # Express curvature per odometer metre so total heading change is preserved.
+        # Express curvature per odometer metre so total heading change is preserved
         return kappa / lap.distance_scale
     return path_curvature(lap.distance_m, lap.x_m, lap.y_m, curvature_window_m)[1]
 
@@ -154,7 +156,7 @@ def estimate_vehicle_state(
     rho = compute_air_density_kg_m3(lap.ambient)
 
     heading, _ = path_curvature(lap.distance_m, lap.x_m, lap.y_m, curvature_window_m)
-    kappa = lap_curvature(lap) if curvature_inv_m is None else curvature_inv_m
+    kappa = lap_curvature(lap, curvature_window_m=curvature_window_m) if curvature_inv_m is None else curvature_inv_m
     v = smooth_speed(lap.speed_ms, step)
     ax = longitudinal_acceleration(v, step)
     ay = v**2 * kappa

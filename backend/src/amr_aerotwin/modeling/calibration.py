@@ -1,20 +1,8 @@
-"""Modular Bayesian calibration of the lap simulator against a measured lap.
+"""Modular Bayesian calibration of the lap simulator against a measured lap (Liu, Bayarri and Berger 2009).
 
-Stage 1 (parameters): theta = log(mu, ClA, CdA, P, k_long[, CdA_low_drag]) is fitted to the
-measured speed trace by maximum a posteriori (MAP) estimation with weak log-normal priors.
-The posterior is approximated by a Laplace (Gaussian) fit at the MAP, and can be checked
-with a random-walk Metropolis sampler.
-
-Residuals along a lap are strongly autocorrelated, so treating 1,100 grid points as
-independent would make the posterior far too narrow. The data term is down-weighted to an
-effective sample size n_eff = n (1 - r1) / (1 + r1), where r1 is the lag-1 autocorrelation
-of the residuals.
-
-Stage 2 (discrepancy): a Gaussian process on the remaining residual v_obs(s) - v_sim(s)
-shows where the point-mass physics is systematically wrong (braking technique, load
-transfer, traction), with a credible band. This follows the modular approach of Liu,
-Bayarri and Berger (2009), "Modularization in Bayesian analysis, with emphasis on analysis
-of computer models".
+Log-parameters are fitted by MAP with weak log-normal priors and a Laplace posterior; a Gaussian process on
+the remaining speed residual then shows where the point-mass physics is wrong. Lap residuals are autocorrelated,
+so the data term counts n_eff = n (1 - r1) / (1 + r1) samples, with r1 the lag-1 autocorrelation.
 """
 
 from __future__ import annotations
@@ -27,11 +15,12 @@ from scipy.optimize import least_squares
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
 
+from amr_aerotwin.modeling.intervals import INTERVAL_Z
 from amr_aerotwin.physics.lapsim import LapSimResult, VehicleParams, simulate_lap
 
 PARAM_NAMES = ("mu", "cla_m2", "cda_m2", "power_w", "long_grip_scale", "low_drag_cda_m2")
 
-# Weak log-normal priors: (median, sigma of log). Wide enough not to dominate the data.
+# Weak log-normal priors as (median, sigma of log), wide enough not to dominate the data
 DEFAULT_PRIORS: dict[str, tuple[float, float]] = {
     "mu": (1.6, 0.35),
     "cla_m2": (4.5, 0.45),
@@ -60,9 +49,8 @@ class CalibrationResult:
     def ci90(self) -> dict[str, tuple[float, float, float]]:
         """Median and 90% credible interval of each parameter (natural units)."""
         sd = np.sqrt(np.diag(self.cov_log))
-        z = 1.6448536
         return {
-            n: (float(np.exp(m)), float(np.exp(m - z * s)), float(np.exp(m + z * s)))
+            n: (float(np.exp(m)), float(np.exp(m - INTERVAL_Z * s)), float(np.exp(m + INTERVAL_Z * s)))
             for n, m, s in zip(self.names, self.theta_map, sd)
         }
 
@@ -117,7 +105,7 @@ def calibrate_lapsim(
     n = len(observed_speed_ms)
     sigma, weight = 3.0, 1.0
     fit = None
-    for _ in range(3):  # alternate: fit theta | sigma, n_eff  ->  re-estimate sigma, n_eff
+    for _ in range(3):  # alternate: fit theta given sigma and n_eff, then re-estimate both
         fit = least_squares(residuals, theta0, args=(sigma, weight), method="trf", x_scale=1.0,
                             diff_step=1e-3, max_nfev=400)
         theta0 = fit.x
@@ -157,7 +145,7 @@ def posterior_lap_times(
     n_draws: int = 200,
     seed: int = 7,
 ) -> NDArray[np.float64]:
-    """Simulated lap times for parameter draws from the Laplace posterior."""
+    """Simulated lap times (s) for parameter draws from the Laplace posterior."""
     rng = np.random.default_rng(seed)
     draws = rng.multivariate_normal(cal.theta_map, cal.cov_log, size=n_draws)
     mask = low_drag_mask if "low_drag_cda_m2" in cal.names else None
@@ -180,10 +168,9 @@ def metropolis_posterior(
     seed: int = 11,
     priors: dict[str, tuple[float, float]] | None = None,
 ) -> tuple[NDArray[np.float64], float]:
-    """Random-walk Metropolis on the same posterior (proposal = scaled Laplace covariance).
+    """Random-walk Metropolis samples of the log-parameters after burn-in, and the acceptance rate.
 
-    Returns (samples of log-parameters after burn-in, acceptance rate). Used to check that
-    the Laplace approximation is adequate.
+    Proposals use the scaled Laplace covariance; the samples check the Laplace approximation.
     """
     priors = {**DEFAULT_PRIORS, **(priors or {})}
     names = cal.names

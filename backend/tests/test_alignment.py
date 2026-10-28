@@ -31,7 +31,7 @@ def test_parse_converts_units_and_detects_gps_fixes():
 
 @pytest.mark.parametrize("lag", [0.0, 0.15, -0.1])
 def test_gps_clock_offset_is_recovered(lag):
-    # Generator delays GPS by `lag`, so a fix stamped t matches car data at t - lag.
+    # The generator delays GPS by `lag`, so a fix stamped t matches car data at t - lag
     raw, t_lap = circle_lap_telemetry(gps_lag_s=lag, speed_ripple_ms=8.0)
     tau, rms = estimate_gps_lag_s(parse_raw_lap(raw), t_lap)
     assert tau == pytest.approx(-lag, abs=0.02)
@@ -121,8 +121,7 @@ def test_invalid_throttle_marker_is_repaired_not_kept():
 
 
 def test_car_data_stall_check_flags_a_held_speed_channel_only(fixture_repo):
-    """A real Silverstone lap scores near zero; the same lap with its speed channel held through a
-    braking zone and then jumping (a car-data stall) fails the check, and the others do not move."""
+    """Real laps pass the stall check; one with its speed held through braking fails, and the others barely move."""
     import dataclasses
 
     from amr_aerotwin.modeling.validation import LAP_CHECKS, car_data_stall_kmh, check_lap
@@ -152,9 +151,7 @@ def test_car_data_stall_check_flags_a_held_speed_channel_only(fixture_repo):
 
 @pytest.mark.parametrize("offset", [0.25, -0.2])
 def test_a_shifted_lap_clock_is_re_timed_not_moved_along_the_track(offset):
-    """The archive's lap clock can be offset from the timing line, for GPS and car data together.
-    That is a time shift: after alignment every grid point must carry the true time and speed
-    there. Treating the gap as a position error instead moves every channel along the track."""
+    """A lap clock offset from the timing line is re-timed, so each grid point keeps its true time and speed."""
     ripple, v0, period = 8.0, 60.0, 7.0
     raw0, t_lap = circle_lap_telemetry(speed_ripple_ms=ripple)
     ref = build_reference_line(parse_raw_lap(raw0), t_lap)
@@ -172,8 +169,7 @@ def test_a_shifted_lap_clock_is_re_timed_not_moved_along_the_track(offset):
 
 
 def test_sector_time_check_matches_official_sectors_and_flags_a_shifted_clock():
-    """The aligned clock must read each lap's official sector times at the sector lines; a lap
-    whose time channel is off in the middle of the lap (not at the line) is flagged."""
+    """The aligned clock reads official sector times at the sector lines; a clock error inside the lap is flagged."""
     import dataclasses
 
     from amr_aerotwin.modeling.validation import sector_time_errors_s

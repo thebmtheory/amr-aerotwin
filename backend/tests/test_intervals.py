@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from amr_aerotwin.modeling.intervals import boot_ci, expanded_levels
+from amr_aerotwin.modeling.intervals import LEVEL, boot_ci, coverage_check, expanded_levels
 
 
 def _coverage(n: int, expanded: bool, reps: int = 600, n_boot: int = 1000, seed: int = 0) -> float:
@@ -28,3 +28,13 @@ def test_expanded_levels_tend_to_plain_percentiles():
     assert lo < 1.5 and hi > 98.5  # much wider than 5/95 for five units
     lo, hi = expanded_levels(10_000)
     assert lo == pytest.approx(5.0, abs=0.05) and hi == pytest.approx(95.0, abs=0.05)
+
+
+def test_coverage_check_shows_the_plain_interval_short_and_the_expanded_one_near_nominal():
+    """The numbers the report quotes for the interval method: plain undercovers with few events, expanded does not."""
+    c = coverage_check(ns=(4, 12), reps=400)
+    assert c["n_events"] == [4, 12] and c["level"] == LEVEL
+    plain, expanded = c["plain_pct"], c["expanded_pct"]
+    assert plain[0] < plain[1] < 100 * LEVEL  # undercovers, and less so with more events
+    assert all(abs(e - 100 * LEVEL) < abs(p - 100 * LEVEL) for p, e in zip(plain, expanded))
+    assert coverage_check(ns=(4,), reps=50) == coverage_check(ns=(4,), reps=50)  # seeded: rebuilds give the same numbers

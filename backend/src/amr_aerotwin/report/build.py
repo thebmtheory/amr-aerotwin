@@ -8,18 +8,24 @@ detail files (here and in report.explorer) are loaded only when that track is op
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import shutil
 from pathlib import Path
 from typing import Any
 
+from amr_aerotwin.report.author import AUTHOR
+from amr_aerotwin.report.note import headline
+
 STATIC = Path(__file__).parent / "static"
 MARKER = ".aerotwin-site"  # written into every built site; only such folders are ever replaced
+HEADLINE_SLOT = "<!--headline-->"  # the line under page.html's title, filled from the results so the claim cannot drift
+AUTHOR_SLOTS = {"<!--author-name-->": AUTHOR.name, "<!--author-email-->": AUTHOR.email, "<!--author-line-->": AUTHOR.line}
 
-# Keys from the per-event summary that the site actually uses (keeps files small)
+# Keys of the per-event summary that the site uses (keeps the files small)
 EVENT_KEYS = [
     "season", "event", "round", "date", "circuit", "lap_length_m", "turning_number", "geometry_ok",
-    "pole", "track", "corners", "map", "comparison", "lapsim", "iso_lap_time", "sandbox", "pod",
+    "pole", "track", "corners", "map", "comparison", "lapsim", "iso_lap_time", "sandbox", "pod", "surrogate",
     "energy", "energy_speed", "race_pace", "warnings", "n_laps", "n_passed", "gps_smoothing_lam",
     "distance_scale", "team_table", "official_pole", "fastest_lap", "wet_session",
 ]
@@ -55,8 +61,16 @@ def build_site(processed_dir: Path, site_dir: Path) -> Path:
         if f.is_file():
             shutil.copy(f, site_dir / f.name)
     # page.html is the body fragment (used as-is by hosts that add their own document
-    # skeleton); index.html wraps it for GitHub Pages and local viewing.
+    # skeleton); index.html wraps it for GitHub Pages and local viewing
     fragment = (STATIC / "page.html").read_text(encoding="utf-8")
+    if fragment.count(HEADLINE_SLOT) != 1:
+        raise ValueError(f"page.html must hold exactly one {HEADLINE_SLOT} for the generated headline")
+    fragment = fragment.replace(HEADLINE_SLOT, html.escape(headline(season), quote=False))
+    for slot, text in AUTHOR_SLOTS.items():  # several places each, some inside attributes
+        if slot not in fragment:
+            raise ValueError(f"page.html has no {slot} for the author details")
+        fragment = fragment.replace(slot, html.escape(text))
+    (site_dir / "page.html").write_text(fragment, encoding="utf-8")
     # Content-hash query strings so browsers never run a stale script after a rebuild
     for asset in ("app.js", "app.css", "lapsim.js", "trackmath.js"):
         h = hashlib.sha1((STATIC / asset).read_bytes()).hexdigest()[:8]

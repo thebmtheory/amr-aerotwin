@@ -1,25 +1,8 @@
 """Energy-limited deployment ("clipping") on straights, from speed traces alone.
 
-Why a speed *drop* is the signature
------------------------------------
-On a straight at full throttle, m dv/dt = P(v, t) / v - drag(v). If power depended only on
-speed, including the 2026 regulated MGU-K taper (1800 - 5 v kW above 290 km/h), the car
-would settle at an equilibrium speed and approach it from below; it would not slow down.
-A sustained deceleration at full throttle with no braking and little lateral load means
-power is falling with *time*: the battery has stopped deploying, or the car is harvesting
-at full throttle. Active-aero and ERS state are not published (FIA data policy, 2026), so
-this indirect signature is the only public view of energy management.
-
-Metrics per straight (model-light). Acceleration has gravity removed using the road
-gradient, so an uphill straight does not read as clipping, and a deceleration only counts
-when it persists for at least 30 m (single-sample noise is ~2 m/s^2).
-- speed_drop_kmh      peak speed minus speed at the end of the straight
-- decel_distance_m    metres of persistent full-throttle deceleration after the peak
-- power_deficit_kw    m * |a_x| * v averaged over the decelerating part: the minimum power
-                      shortfall relative to holding speed (drag change ignored, so a
-                      lower bound)
-- time_loss_s         time lost against holding the peak speed to the end of the straight
-                      (an upper bound on what full deployment could recover)
+If power depended only on speed (the 2026 MGU-K taper included), a car at full throttle would approach an
+equilibrium speed from below, so a sustained full-throttle deceleration means power falling with time. ERS
+and active-aero state are not in the public data (see data/reference/SOURCES.md).
 """
 
 from __future__ import annotations
@@ -32,7 +15,7 @@ from amr_aerotwin.physics.dynamics import VehicleState
 from amr_aerotwin.physics.vehicle_params import straight_segments
 
 DECEL_THRESHOLD_MS2 = -0.3
-MIN_PERSIST_M = 30.0
+MIN_PERSIST_M = 30.0  # single-sample acceleration noise is about 2 m/s^2, so a deceleration must last this long
 
 
 def _persistent(flag: np.ndarray, n_min: int) -> np.ndarray:
@@ -53,7 +36,11 @@ def _persistent(flag: np.ndarray, n_min: int) -> np.ndarray:
 
 
 def straight_energy_metrics(state: VehicleState, min_length_m: float = 150.0) -> pd.DataFrame:
-    """Per-straight clipping metrics for one lap."""
+    """Clipping metrics for each straight of one lap.
+
+    Acceleration is propulsive (gravity removed). The power deficit ignores the change in drag, so it is a
+    lower bound; the time loss, against holding peak speed, is an upper bound on what full deployment recovers.
+    """
     rows = []
     step = state.lap.grid_step_m
     n_min = max(1, int(round(MIN_PERSIST_M / step)))
@@ -82,7 +69,10 @@ def straight_energy_metrics(state: VehicleState, min_length_m: float = 150.0) ->
 
 
 def lap_energy_summary(state: VehicleState) -> dict[str, float]:
-    """Totals over all straights of one lap."""
+    """Clipping metrics over all straights of one lap.
+
+    Distance and time are summed; speed drop is a mean and power deficit a deceleration-weighted mean.
+    """
     df = straight_energy_metrics(state)
     if df.empty:
         return {"n_straights": 0.0, "speed_drop_kmh": 0.0, "decel_distance_m": 0.0,
@@ -100,12 +90,10 @@ PROFILE_BINS = 10
 
 
 def straight_speed_profile(states: list[VehicleState], ref: VehicleState, min_length_m: float = 400.0) -> pd.DataFrame:
-    """Speed of every team along each main straight, at matched fractions of its length.
+    """Each team's mean speed (km/h) in PROFILE_BINS equal parts of every main straight.
 
-    Straights are taken from the reference (pole) lap: full throttle from corner exit to the
-    braking point. Each straight is split into PROFILE_BINS equal parts by position, so all
-    cars are compared at the same piece of track (gradient and wind are shared). Returns one
-    row per (team, straight, bin) with the team's mean speed there (km/h).
+    Straights and bins are positions on the reference (pole) lap, so all cars are compared on the same
+    piece of track, with gradient and wind shared.
     """
     rows = []
     for k, seg in enumerate(straight_segments(ref, min_length_m=min_length_m, trim_m=0.0, drop_line_cut=True)):
@@ -125,10 +113,10 @@ def straight_speed_profile(states: list[VehicleState], ref: VehicleState, min_le
 
 
 def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, seed: int = 0) -> pd.DataFrame:
-    """Team speed minus the median of the *other* teams, per fraction of straight length.
+    """Team speed minus the other teams' median (km/h) per bin of straight length, with event-bootstrap intervals.
 
-    `profiles`: rows from `straight_speed_profile` plus `round`. Each event contributes its
-    mean over straights; the bootstrap resamples events.
+    `profiles` are `straight_speed_profile` rows plus `round`; each event counts once, as its mean over
+    straights. Growth along the straight, its two halves and the time cost per lap go in `attrs`.
     """
     p = profiles.copy()
     rows = []
@@ -151,9 +139,8 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     half = PROFILE_BINS // 2
     first = boots[:, half - 1] - boots[:, 0]
     second = boots[:, -1] - boots[:, half]
-    # The shape alone cannot separate causes: extra drag, deployment ending earlier and
-    # harvesting at full throttle all open a gap along a straight, so the profile locates the
-    # loss but does not attribute it.
+    # The profile locates a loss but cannot attribute it: extra drag, deployment ending sooner and
+    # harvesting at full throttle all open a gap along a straight
     n = len(arr)
     lo, hi = boot_ci_columns(boots, n)
     out = pd.DataFrame({
@@ -169,7 +156,7 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     out.attrs["first_half_ci90"] = boot_ci(first, n)
     out.attrs["second_half_kmh"] = float(np.nanmean(arr[:, -1] - arr[:, half]))
     out.attrs["second_half_ci90"] = boot_ci(second, n)
-    # Leave-one-event-out range of the second-half change: does any single event carry it?
+    # Leave-one-event-out range of the second-half change, to show whether one event carries it
     ev_second = arr[:, -1] - arr[:, half]
     loo = [float(np.nanmean(np.delete(ev_second, i))) for i in range(n)] if n > 2 else []
     out.attrs["second_half_loo_range"] = (min(loo), max(loo)) if loo else (float("nan"), float("nan"))
@@ -179,8 +166,8 @@ def speed_gap_profile(profiles: pd.DataFrame, team: str, n_boot: int = 2000, see
     out.attrs["n_straights"] = int(len(late))
     out.attrs["n_straights_losing_late"] = int((late < 0).sum())
     if d["bin_length_m"].notna().all():
-        # Time cost per lap (all main straights) of the whole straight-line gap, and of the part
-        # that builds up along the straight (gap beyond the corner-exit gap of that straight)
+        # Time cost per lap over all main straights: of the whole gap, and of the part that builds up
+        # along the straight (beyond that straight's corner-exit gap)
         v_f = d["field_kmh"] / 3.6
         exit_gap = d.groupby(["round", "straight"])["gap_kmh"].transform(lambda x: x.iloc[0])
         d["t_total"] = d["bin_length_m"] * (1 / np.maximum(v_f + d["gap_kmh"] / 3.6, 1) - 1 / v_f)

@@ -125,6 +125,21 @@ def test_lap_checks_can_fail():
     assert geometry_ok(-1.01) and not geometry_ok(0.9)
 
 
+def test_failure_counts_follow_the_lap_check_rule():
+    """The report's count for each check rejects exactly the laps check_lap rejects for it."""
+    from amr_aerotwin.modeling.validation import LAP_CHECKS, failures_by_check
+
+    ok = {m: 0.0 for m in LAP_CHECKS}
+    ok.update(projection_rms_m=1.0, speed_trap_minus_max_kmh=-15.0)
+    qualities = [ok, {**ok, "frozen_run_m": 250.0}, {**ok, "gps_speed_rms_ms": float("nan")},
+                 {**ok, "speed_trap_minus_max_kmh": float("nan")}, {**ok, "frozen_run_m": 101.0, "car_data_stall_kmh": -45.0}]
+    counts = failures_by_check({m: np.array([q[m] for q in qualities]) for m in LAP_CHECKS})
+    for m in LAP_CHECKS:
+        assert counts[m] == sum(m in check_lap(_lap(np.full(100, 50.0), quality=q)).failures for q in qualities), m
+    assert counts["frozen_run_m"] == 2 and counts["gps_speed_rms_ms"] == 1 and counts["speed_trap_minus_max_kmh"] == 0
+    assert failures_by_check({"frozen_run_m": np.array([250.0])}) == {"frozen_run_m": 1}  # checks without values are left out
+
+
 def test_race_pace_refuses_unidentifiable_single_strategy_race():
     laps, _ = _synthetic_race()
     same = laps.copy()

@@ -53,7 +53,7 @@ def test_long_straight_reaches_drag_limited_terminal_speed():
 
 
 def test_braking_distance_without_aero_matches_kinematics():
-    # Open straight ending in a very tight hairpin: braking from v_inf down to the hairpin limit.
+    # Open straight ending in a very tight hairpin: braking from v_inf down to the hairpin limit
     p = VehicleParams(800, 0.0, 1e-6, 1.5, 2e6, 1.2, crr=0.0, long_grip_scale=1.0)
     s = np.arange(0, 3000, 1.0)
     k = np.zeros_like(s)

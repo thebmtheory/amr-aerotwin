@@ -1,22 +1,8 @@
-"""Fuel- and tyre-corrected race pace, fitted from every green-flag lap of a race.
+"""Fuel- and tyre-corrected race pace, fitted by least squares to every green-flag lap of one race.
 
-Model (ordinary least squares with fixed effects, one race at a time):
-
-    t(d, l) = alpha_d + delta_c + gamma_c * age + beta * lap + e
-
-    alpha_d   driver pace on the reference compound, fresh tyres, zero laps of fuel burn
-    delta_c   compound offset vs the reference compound (most-used compound)
-    gamma_c   tyre degradation per lap of tyre age, per compound
-    beta      fuel effect per lap (negative: the car gets lighter)
-
-Fuel and tyre age are separable because tyre age resets at every stop while lap number
-does not. Laps are filtered to green-flag running (no pit in/out laps, no lap 1, track
-status '1', within 107% of the driver's median) and gross outliers are trimmed iteratively.
-Uncertainty comes from a delete-one-stint jackknife (Cameron, Gelbach and Miller 2008
-discuss the cluster jackknife): laps within a stint share traffic, tyre and set-up effects,
-and a driver's pace is re-estimated from their other stints in each refit. The tests check
-interval coverage by Monte Carlo for the fuel effect and for team gaps, with autocorrelated
-lap errors and stint-level offsets.
+Lap time = alpha_driver + delta_compound + gamma_compound * tyre_age + beta * lap, with alpha the pace on the
+most-used compound on fresh tyres and no fuel burnt. Tyre age resets at each stop and lap number does not, which
+separates tyres from fuel. Intervals: delete-one-stint jackknife (Cameron, Gelbach and Miller 2008).
 """
 
 from __future__ import annotations
@@ -26,12 +12,14 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from amr_aerotwin.modeling.intervals import INTERVAL_Z
+
 SLICKS = ("SOFT", "MEDIUM", "HARD")
 
 
 @dataclass(frozen=True)
 class RacePaceResult:
-    fuel_s_per_lap: float
+    fuel_s_per_lap: float  # negative: the car gets lighter
     fuel_ci90: tuple[float, float]
     deg_s_per_lap: dict[str, float]
     deg_ci90: dict[str, tuple[float, float]]
@@ -46,7 +34,7 @@ class RacePaceResult:
 
 
 def clean_race_laps(laps: pd.DataFrame) -> pd.DataFrame:
-    """Green-flag racing laps on slick tyres."""
+    """Green-flag laps on slick tyres, without lap 1, pit laps and laps over 107% of the driver's median."""
     d = laps.copy()
     d = d[d["time"].notna() & (d["lap"] >= 2) & ~d["is_pit_in"] & ~d["is_pit_out"]]
     d = d[(d["status"] == "1") & ~d["del"] & d["compound"].isin(SLICKS) & d["life"].notna()]
@@ -113,12 +101,10 @@ def fit_race_pace(
         return None
     coef, used, resid_sd = _fit(d, ref)
 
-    # Delete-one-stint jackknife (the cluster jackknife, CR3-like): refit without each stint in
-    # turn. A driver's pace is then re-estimated from their other stints, so stint-level offsets
-    # (traffic, tyre preparation, set-up) enter the uncertainty. Residual-based bootstraps
-    # cannot do this here: the driver fixed effect absorbs part of each stint offset, which
-    # shrinks the residuals. Stints whose removal would leave a driver or compound with no
-    # laps are kept in every refit.
+    # Delete-one-stint jackknife (cluster jackknife, CR3-like): each refit re-estimates a driver's pace from
+    # their other stints, so stint offsets (traffic, tyre preparation, set-up) enter the uncertainty. A residual
+    # bootstrap would miss them, because the driver effect absorbs part of each offset. Stints whose removal
+    # would leave a driver or compound with no laps stay in every refit.
     stints = used["stint_key"].unique()
     reps = []
     for k in stints:
@@ -129,7 +115,6 @@ def fit_race_pace(
         reps.append(b_k.reindex(coef.index))
     jk = pd.DataFrame(reps)
     g = len(jk)
-    z90 = 1.6448536
 
     def jk_sd(values: np.ndarray) -> float:
         v = np.asarray(values, float)
@@ -138,7 +123,7 @@ def fit_race_pace(
 
     def ci(name: str) -> tuple[float, float]:
         sd = jk_sd(jk[name].to_numpy()) if g > 2 else float("nan")
-        return float(coef[name] - z90 * sd), float(coef[name] + z90 * sd)
+        return float(coef[name] - INTERVAL_Z * sd), float(coef[name] + INTERVAL_Z * sd)
 
     drivers = sorted(used["drv"].unique())
     dp = pd.DataFrame(
@@ -151,7 +136,7 @@ def fit_race_pace(
             "n_laps": [int((used["drv"] == x).sum()) for x in drivers],
         }
     )
-    # Team pace = faster driver's corrected pace; CI from the bootstrap of that statistic
+    # Team pace is the faster driver's corrected pace; gap intervals come from the jackknife of that minimum
     teams = sorted(dp["team"].unique())
     team_vals = {t: dp[dp["team"] == t]["pace_s"].min() for t in teams}
     team_jk = {
@@ -163,7 +148,7 @@ def fit_race_pace(
     def gap_ci(t: str) -> tuple[float, float]:
         sd = jk_sd(team_jk[t] - best_jk)
         gap = team_vals[t] - best
-        return float(gap - z90 * sd), float(gap + z90 * sd)
+        return float(gap - INTERVAL_Z * sd), float(gap + INTERVAL_Z * sd)
 
     cis = {t: gap_ci(t) for t in teams}
 
@@ -171,7 +156,7 @@ def fit_race_pace(
     def driver_gap_ci(x: str) -> tuple[float, float]:
         sd = jk_sd(jk[f"alpha:{x}"].to_numpy() - best_jk)
         gap = float(coef[f"alpha:{x}"] - best)
-        return float(gap - z90 * sd), float(gap + z90 * sd)
+        return float(gap - INTERVAL_Z * sd), float(gap + INTERVAL_Z * sd)
 
     dp["gap_s"] = dp["pace_s"] - best
     dgap = [driver_gap_ci(x) for x in dp["driver"]]

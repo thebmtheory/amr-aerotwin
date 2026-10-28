@@ -1,23 +1,8 @@
-"""Direct estimation of cornering grip and straight-line performance from telemetry.
+"""Cornering grip and straight-line segments measured directly from telemetry.
 
-Grip vs dynamic pressure
-------------------------
-For a point mass with constant friction, the limit acceleration is a straight line in
-dynamic pressure q:  a_limit = mu g + (mu ClA / m) q. Real tyres are load-sensitive
-(friction falls as load rises), so the slope and intercept of that line are *effective*
-values: absolute mu and ClA cannot be separated from public telemetry (fitting them gives
-mu ~ 3, which is not physical). What the data does identify well is the limit itself
-inside the range of q actually driven. So for each car we fit the line through one
-near-limit point per corner and report:
-
-    grip_low_g  = a_limit(q_low)  / g     slow-corner grip (mechanical-dominated)
-    grip_high_g = a_limit(q_high) / g     fast-corner grip (aero-dominated)
-
-with q_low / q_high fixed per event (shared by all teams), so comparisons are like for
-like. Corners taken flat out are excluded because the car has spare grip there.
-Uncertainty is a bootstrap over corners (the independent unit), not grid points.
-
-Straight-line performance is analysed in `modeling/powertrain.py` and `modeling/energy.py`.
+Limit acceleration is fitted as a line in dynamic pressure q (mu g + mu ClA q / m for a point mass) to one
+near-limit point per corner. Tyre load sensitivity makes its slope and intercept effective values (a free
+fit gives mu ~ 3), so grip is read only at two event-wide pressures, q_low and q_high.
 """
 
 from __future__ import annotations
@@ -32,13 +17,15 @@ from sklearn.linear_model import HuberRegressor
 from amr_aerotwin.domain import GRAVITY_ACCEL
 from amr_aerotwin.physics.dynamics import VehicleState
 from amr_aerotwin.physics.kinematics import corner_windows
+from amr_aerotwin.physics.lapsim import CRR
 
-CRR = 0.012
 MIN_LIMIT_LAT_G = 2.0
 
 
 @dataclass(frozen=True)
 class GripFit:
+    """Grip line for one car, read at the event's q_low (slow corners) and q_high (fast corners), in g."""
+
     q_low_pa: float
     q_high_pa: float
     grip_low_g: float
@@ -74,7 +61,7 @@ def corner_limit_points(
         flat_out = lap.throttle_pct[win].min() >= 97.0 and lap.brake[win].max() < 0.5
         idx = np.flatnonzero(win)[np.argmax(np.abs(state.ay_ms2[win]))]
         ay = abs(float(state.ay_ms2[idx]))
-        # Longitudinal *tyre* acceleration: remove aero drag and rolling resistance
+        # Longitudinal tyre acceleration: add back aero drag and rolling resistance
         ax = float(state.ax_propulsive_ms2[idx] + state.q_dyn_pa[idx] * cda_for_tyre_force_m2 / state.mass_kg
                    + GRAVITY_ACCEL * CRR)
         rows.append(
@@ -93,14 +80,14 @@ def corner_limit_points(
 
 
 def _grip_line(q: NDArray[np.float64], a: NDArray[np.float64]) -> tuple[float, float]:
-    """Robust line a = b0 + b1 q (Huber). Returns (intercept, slope)."""
+    """Huber fit of a = b0 + b1 q: (intercept m/s^2, slope m/s^2 per Pa)."""
     x = (q / 1000.0)[:, None]  # kPa for conditioning
     model = HuberRegressor(epsilon=1.5, alpha=0.0, max_iter=500).fit(x, a)
     return float(model.intercept_), float(model.coef_[0]) / 1000.0
 
 
 def limit_points_for_fit(points: pd.DataFrame) -> pd.DataFrame:
-    """Corners where the car is plausibly at the grip limit."""
+    """Corners plausibly at the grip limit: not taken flat out (spare grip there) and above MIN_LIMIT_LAT_G."""
     return points[(~points["flat_out"]) & (points["ay_ms2"] >= MIN_LIMIT_LAT_G * GRAVITY_ACCEL)]
 
 
@@ -111,7 +98,10 @@ def fit_grip_vs_q(
     n_boot: int = 400,
     seed: int = 3,
 ) -> GripFit | None:
-    """Fit the grip line through near-limit corner points and evaluate it at q_low / q_high."""
+    """Fit the grip line through near-limit corner points and evaluate it at q_low / q_high.
+
+    Intervals come from a bootstrap over corners (the independent unit), not grid points.
+    """
     use = limit_points_for_fit(points)
     if len(use) < 6 or use["q_pa"].max() - use["q_pa"].min() < 800.0:
         return None
@@ -163,12 +153,10 @@ def straight_segments(
     max_speed_kmh: float | None = None,
     drop_line_cut: bool = False,
 ) -> list[NDArray[np.int64]]:
-    """Index arrays of full-throttle, no-brake, low-lateral-load runs (trimmed at both ends).
+    """Index arrays of full-throttle, no-brake, low-lateral-load runs, trimmed by `trim_m` at both ends.
 
-    The 20 m either side of the timing line are always excluded (the lap's speed trace is
-    discontinuous there). A straight that crosses the line is therefore cut in two; with
-    `drop_line_cut=True` those pieces are dropped, because they start or end mid-straight and
-    would be mistaken for a corner exit or a braking point.
+    Points within 20 m of the timing line are always dropped (speed jumps there); `drop_line_cut=True` also
+    drops straights the line cuts in two, whose cut ends would pass for a corner exit or a braking point.
     """
     lap = state.lap
     ok = (

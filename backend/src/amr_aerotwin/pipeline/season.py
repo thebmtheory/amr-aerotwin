@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -19,23 +18,34 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from amr_aerotwin.data.alignment import GRID_STEP_M
 from amr_aerotwin.data.repository import DEFAULT_CACHE_DIR, DataUnavailableError, TelemetryRepository
-from amr_aerotwin.domain import DATA_DIR, TARGET_TEAM
+from amr_aerotwin.domain import DATA_DIR, REGULATIONS, REPRESENTATIVE_LAP_RATIO, TARGET_TEAM, slug
+from amr_aerotwin.modeling.calibration import DEFAULT_PRIORS
 from amr_aerotwin.modeling.corner_model import (
     cross_validate,
     hybrid_shapley,
     team_corner_deficit,
 )
-from amr_aerotwin.modeling.energy import relative_metric, speed_gap_profile
-from amr_aerotwin.modeling.intervals import boot_ci, boot_ci_columns
-from amr_aerotwin.modeling.powertrain import joint_deficit  # noqa: F401  (used by powertrain_analysis)
+from amr_aerotwin.modeling.energy import MIN_PERSIST_M, relative_metric, speed_gap_profile
+from amr_aerotwin.modeling.intervals import INTERVAL_Z, LEVEL, boot_ci, boot_ci_columns, coverage_check
+from amr_aerotwin.modeling.lap_compare import EXIT_M
+from amr_aerotwin.modeling.powertrain import (
+    MIN_FIT_POSITIONS,
+    MIN_FIT_SPEED_SPAN_KMH,
+    joint_deficit,
+)
 from amr_aerotwin.modeling.season import (
+    MDE_ALPHA,
+    MDE_POWER,
+    NOISE_RATIO_MAX,
     bayesian_changepoint,
     car_vs_driver_variance,
     changepoint_count_evidence,
     supertime_table,
     upgrade_effects,
 )
+from amr_aerotwin.modeling.validation import LAP_CHECKS, failures_by_check
 from amr_aerotwin.physics.dynamics import corner_speed_class
 from amr_aerotwin.physics.lapsim import VehicleParams, simulate_lap
 from amr_aerotwin.pipeline.event import _r, prefetch_event, safe_process_event
@@ -44,10 +54,6 @@ log = logging.getLogger(__name__)
 PROCESSED_DIR = DATA_DIR / "processed"
 UPGRADES_CSV = DATA_DIR / "reference" / "amr_upgrades.csv"
 RECENT_DAYS = 10  # events this recent are re-downloaded on fetch (timing data may still change)
-
-
-def slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
 def event_calendar(repo: TelemetryRepository, years: list[int], refresh: bool = False) -> pd.DataFrame:
@@ -88,7 +94,7 @@ def fetch(years: list[int], cache_dir: Path = DEFAULT_CACHE_DIR, workers: int = 
             try:
                 f.result()
                 log.info("fetched %s %s", r.season, r.event)
-            except Exception as err:  # noqa: BLE001
+            except Exception as err:
                 log.warning("fetch failed %s %s: %s", r.season, r.event, err)
                 failures[f"{r.season}|{r.event}"] = str(err)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -135,7 +141,7 @@ def build(
             job = futures[fut]
             try:
                 res = fut.result()
-            except Exception as err:  # noqa: BLE001 - a crashed worker must not lose the season
+            except Exception as err:  # a crashed worker must not lose the season
                 res = f"worker crashed: {type(err).__name__}: {err}"
             if isinstance(res, str):
                 fetch_fail = _fetch_failures(out_dir).get(f"{job[1]}|{job[2]}")
@@ -191,9 +197,9 @@ def load_tables(out_dir: Path = PROCESSED_DIR) -> dict[str, pd.DataFrame]:
     return {n: read(n) for n in ("drivers", "teams", "corners", "race_pace", "accel", "profile", "timing", "sections")}
 
 
-# --------------------------------------------------------------------------- analyses
+# Season analyses
 def rel_to_other_teams(df: pd.DataFrame, col: str, keys: tuple[str, ...] = ("season", "round")) -> pd.Series:
-    """Each team's value divided by the median of the *other* teams at the same event."""
+    """Each team's value divided by the other teams' median at the same event; NaN with fewer than four others."""
     out = pd.Series(np.nan, index=df.index)
     for _, g in df.groupby(list(keys)):
         for i, row in g.iterrows():
@@ -217,9 +223,8 @@ def _bootstrap_mean(values: np.ndarray, n_boot: int = 1000, seed: int = 0) -> tu
 def aero_map(teams: pd.DataFrame, events: dict[str, dict]) -> dict[str, Any]:
     """Per season: each team's high-speed grip and straight-line speed relative to the field.
 
-    Converted to ClA- and CdA-equivalent % so lap-time sensitivity lines can be overlaid:
-      dClA% ~ dGrip_high% / aero_share  (grip_high = mu (g + q ClA / m))
-      dCdA% ~ -3 dV%                     (drag-limited speed  v ~ CdA^(-1/3))
+    Converted to ClA- and CdA-equivalent % so lap-time sensitivity lines can be overlaid, using
+    dClA% ~ dGrip_high% / aero_share (grip_high = mu (g + q ClA / m)) and dCdA% ~ -3 dV% (top speed v ~ CdA^(-1/3)).
     """
     t = teams[teams["geometry_ok"].astype(bool)].copy()
     share = t.groupby(["season", "round"])["aero_share_high"].transform("median")
@@ -265,6 +270,44 @@ def circuit_sensitivities(events: dict[str, dict]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: (r["season"], r["round"]))
 
 
+SURROGATE_MEDIANS = ("rmse_s", "max_abs_err_s", "coverage90", "linear_rmse_s", "linear_max_abs_err_s", "spread_s")
+SURROGATE_ROW_KEYS = ("rmse_s", "linear_rmse_s", "max_abs_err_s", "coverage90", "spread_s")
+
+
+def surrogate_summary(events: dict[str, dict]) -> dict[str, Any]:
+    """Per season: how well the lap-time emulator and the linear surrogate predict held-out simulator runs.
+
+    Coverage at one event is noisy (a design can miss the response's kinks), so the mean over events, which is
+    the pooled coverage when every event has the same n_test, also gets a bootstrap interval over events.
+    """
+    by_season: dict[int, list[dict[str, Any]]] = {}
+    for e in events.values():
+        if e.get("surrogate"):
+            by_season.setdefault(int(e["season"]), []).append(e)
+    out: dict[str, Any] = {}
+    for season, evs in sorted(by_season.items()):
+        evs = sorted(evs, key=lambda e: e["round"])
+        sg = [e["surrogate"] for e in evs]
+
+        def same(key: str) -> Any:
+            vals = [x[key] for x in sg]
+            return vals[0] if all(v == vals[0] for v in vals) else None
+
+        params = list(sg[0]["sobol_first"])
+        cov_mean, cov_lo, cov_hi = _bootstrap_mean(np.array([x["coverage90"] for x in sg]), n_boot=2000, seed=season)
+        out[str(season)] = {
+            "n_events": len(sg),
+            "n_train": same("n_train"), "n_test": same("n_test"), "half_range": same("half_range"),
+            **{k: _r(float(np.median([x[k] for x in sg])), 4) for k in SURROGATE_MEDIANS},
+            "coverage90_mean": _r(cov_mean, 4), "coverage90_mean_ci90": _r([cov_lo, cov_hi], 4),
+            "sobol_first": {p: _r(float(np.mean([x["sobol_first"][p] for x in sg])), 4) for p in params},
+            "n_gp_rmse_below_linear": int(sum(x["rmse_s"] < x["linear_rmse_s"] for x in sg)),
+            "events": [{"event": e["event"], "round": e["round"], "car": e["surrogate"]["car"],
+                        **{k: e["surrogate"][k] for k in SURROGATE_ROW_KEYS}} for e in evs],
+        }
+    return out
+
+
 def powertrain_analysis(accel: pd.DataFrame) -> dict[str, Any]:
     """Joint (dP, dCdA) of every team vs the field, per season (event bootstrap)."""
     out: dict[str, Any] = {}
@@ -287,13 +330,11 @@ def powertrain_analysis(accel: pd.DataFrame) -> dict[str, Any]:
 
 
 def grip_matched_params(pole: VehicleParams, r_low: float, r_high: float, q_low: float, q_high: float) -> tuple[VehicleParams, bool]:
-    """Scale (mu, ClA) of the pole car so its grip at q_low and q_high changes by r_low, r_high.
+    """Pole car with (mu, ClA) rescaled so its grip at q_low and q_high changes by r_low and r_high.
 
-    Lap-sim grip is mu (g + q ClA / m). Two reference points give two equations:
-      mu' (g + q_l c') = r_l mu (g + q_l c),   mu' (g + q_h c') = r_h mu (g + q_h c),  c = ClA/m
-    whose solution is c' = g (R - 1) / (q_h - R q_l) with R = (r_h / r_l)(g + q_h c)/(g + q_l c).
-    Returns (params, clamped): `clamped` is True when the solution needed a negative ClA and
-    was limited to zero, in which case the high-q ratio is not reproduced.
+    Lap-sim grip is mu (g + q ClA / m); with c = ClA / m this solves mu' (g + q c') = r mu (g + q c) at both
+    pressures. Returns (params, clamped): `clamped` means the solution needed a negative ClA, which is set to
+    zero, so the high-q ratio is not reproduced.
     """
     from dataclasses import replace
 
@@ -312,7 +353,7 @@ def _posterior_draws(ls: dict[str, Any], n: int, rng: np.random.Generator) -> li
     """Parameter draws from a lap-sim calibration's log-normal Laplace posterior."""
     names = ls["param_names"]
     med = np.log([ls["params"][k]["median"] for k in names])
-    sd = np.array([(np.log(ls["params"][k]["hi"]) - np.log(ls["params"][k]["lo"])) / (2 * 1.6448536) for k in names])
+    sd = np.array([(np.log(ls["params"][k]["hi"]) - np.log(ls["params"][k]["lo"])) / (2 * INTERVAL_Z) for k in names])
     corr = np.asarray(ls["correlation"], float)
     cov = corr * np.outer(sd, sd) + 1e-12 * np.eye(len(names))
     draws = np.exp(rng.multivariate_normal(med, cov, size=n))
@@ -321,15 +362,17 @@ def _posterior_draws(ls: dict[str, Any], n: int, rng: np.random.Generator) -> li
 
 def _ratio_se(a: float, a_lo: float, a_hi: float, b: float, b_lo: float, b_hi: float) -> float:
     """Approximate SE of a/b from two 90% intervals (delta method on log scale)."""
-    sa, sb = (a_hi - a_lo) / (2 * 1.6448536 * a), (b_hi - b_lo) / (2 * 1.6448536 * b)
+    sa, sb = (a_hi - a_lo) / (2 * INTERVAL_Z * a), (b_hi - b_lo) / (2 * INTERVAL_Z * b)
     return float((a / b) * np.sqrt(sa**2 + sb**2))
 
 
 def _straight_peaks_kmh(speed_ms: np.ndarray, kappa: np.ndarray, step_m: float, min_len_m: float = 350.0,
                         windows: list | None = None) -> float:
-    """Mean peak speed over the lap's straights. With `windows` (the same index windows used to
-    measure the teams' top-speed gap), peaks are taken there; otherwise over runs with
-    |curvature| < 1/1000 m of at least min_len_m."""
+    """Mean peak speed over the lap's straights (km/h).
+
+    Uses `windows` when given (those the teams' top-speed gap is measured on), else runs of at least
+    `min_len_m` with |curvature| < 1e-3 1/m (radius over 1 km).
+    """
     if windows:
         return float(np.mean([np.max(speed_ms[lo:hi + 1]) for lo, hi in windows]) * 3.6)
     straight = np.abs(kappa) < 1e-3
@@ -371,20 +414,12 @@ def match_drag_to_top_speed(base: VehicleParams, s_grid: np.ndarray, kappa: np.n
 
 def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame,
                           target: str = TARGET_TEAM, n_draws: int = 80, seed: int = 9) -> list[dict[str, Any]]:
-    """Account for the target team's qualifying gap to pole at each event with the lap sim.
+    """Per event: the target team's qualifying gap to pole as the lap sim accounts for it (s), with 90% intervals.
 
-    The pole car's calibrated simulator is modified by
-    (a) the target team's measured grip ratio to the pole team at low and high dynamic
-        pressure (two equations for mu and ClA), and
-    (b) one effective drag change chosen so the simulated peak speed on the straights moves by
-        the *measured* top-speed gap between the two teams. Power and drag are not separately
-        identifiable from public data (see modeling/powertrain.py), so a single effective
-        parameter matched to an observable is used instead of a two-parameter fit.
-    This is an accounting of the gap in physical terms, not an out-of-sample prediction: the
-    inputs come from the same laps. Uncertainty propagates the pole car's parameter
-    posterior and the grip-ratio intervals.
+    The pole car's simulator gets the target's grip ratios at low and high dynamic pressure and one effective drag
+    change matched to the measured top-speed gap (power and drag are not separately identifiable, see
+    modeling/powertrain.py). The inputs come from the same laps, so this is an accounting, not a prediction.
     """
-
     rng = np.random.default_rng(seed)
     rows = []
     for e in events.values():
@@ -418,8 +453,6 @@ def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame,
         length = sb["lap_length_m"]
         q_l, q_h = e["track"]["q_low_pa"], e["track"]["q_high_pa"]
 
-        drag = _with_drag
-
         def sim(pv: VehicleParams):
             return simulate_lap(s_grid, kappa, pv, mask, length)
 
@@ -430,8 +463,8 @@ def deficit_decomposition(events: dict[str, dict], teams: pd.DataFrame,
         def components(b: VehicleParams, r_l: float, r_h: float) -> tuple[float, float, float, bool]:
             t0 = sim(b).lap_time_s
             gp, clamped = grip_matched_params(b, r_l, r_h, q_l, q_h)
-            return (sim(gp).lap_time_s - t0, sim(drag(b, d_cda)).lap_time_s - t0,
-                    sim(drag(gp, d_cda)).lap_time_s - t0, clamped)
+            return (sim(gp).lap_time_s - t0, sim(_with_drag(b, d_cda)).lap_time_s - t0,
+                    sim(_with_drag(gp, d_cda)).lap_time_s - t0, clamped)
 
         r_low, r_high = a.grip_low_g / p.grip_low_g, a.grip_high_g / p.grip_high_g
         grip_s, str_s, both, clamped = components(base, r_low, r_high)
@@ -483,7 +516,7 @@ def decomposition_summary(rows: list[dict[str, Any]], n_boot: int = 4000, seed: 
             "r2_event_level": float(1 - np.sum((act - pred) ** 2) / np.sum((act - act.mean()) ** 2)),
             "mae_s": float(np.mean(np.abs(act - pred))),
             "correlation": r,
-            "correlation_ci90": [float(np.tanh(zr - 1.6448536 * se)), float(np.tanh(zr + 1.6448536 * se))],
+            "correlation_ci90": [float(np.tanh(zr - INTERVAL_Z * se)), float(np.tanh(zr + INTERVAL_Z * se))],
             "mean_grip_s": float(g["grip_s"].mean()),
             "mean_straight_s": float(g["straight_s"].mean()),
             "straight_ci90": list(boot_ci(straight_mean_draws, n)),
@@ -492,13 +525,12 @@ def decomposition_summary(rows: list[dict[str, Any]], n_boot: int = 4000, seed: 
     return out
 
 
-def upgrade_component_shift(teams: pd.DataFrame, accel: pd.DataFrame, season: int, event: str,
+def upgrade_component_shift(teams: pd.DataFrame, season: int, event: str,
                             target: str = TARGET_TEAM) -> dict[str, Any] | None:
     """What an upgrade changed: cornering grip vs straight-line performance, before vs after.
 
-    Grip is relative to the median of the *other* teams at each event. The uncertainty of a
-    period mean is the between-event standard error, and the shift is reported with its
-    z-score and event counts, so small samples are visible as such.
+    Grip is relative to the other teams' median at each event. A period mean's uncertainty is the between-event
+    standard error; the shift comes with its z-score and event counts so small samples show as such.
     """
     t = teams[teams["season"] == season].copy()
     ev = t[t["event"] == event]
@@ -514,7 +546,7 @@ def upgrade_component_shift(teams: pd.DataFrame, accel: pd.DataFrame, season: in
                 continue
             m = float(o.median())
             lo, hi = a[col.replace("_g", "_lo")].iloc[0], a[col.replace("_g", "_hi")].iloc[0]
-            rows.append({"round": int(rnd), "ratio": float(a[col].iloc[0] / m), "se": float((hi - lo) / (2 * 1.6448536) / m)})
+            rows.append({"round": int(rnd), "ratio": float(a[col].iloc[0] / m), "se": float((hi - lo) / (2 * INTERVAL_Z) / m)})
         return pd.DataFrame(rows)
 
     def period(df: pd.DataFrame, after: bool) -> dict[str, float]:
@@ -523,7 +555,7 @@ def upgrade_component_shift(teams: pd.DataFrame, accel: pd.DataFrame, season: in
         if n == 0:
             return {"mean": float("nan"), "se": float("nan"), "n": 0}
         # Between-event spread already contains each event's measurement error; with a single
-        # event, fall back on that event's own fit uncertainty.
+        # event, fall back on that event's own fit uncertainty
         se = float(d["ratio"].std(ddof=1) / np.sqrt(n)) if n > 1 else float(d["se"].iloc[0])
         return {"mean": float(d["ratio"].mean()), "se": se, "n": n}
 
@@ -548,11 +580,10 @@ SIM_PARAM_KEYS = ("mu", "cla_m2", "cda_m2", "power_w", "long_grip_scale", "low_d
 
 def geometry_sim_speeds(events: dict[str, dict], window_m: float = 60.0,
                         train_keys: set[str] | None = None) -> pd.DataFrame:
-    """Minimum corner speed from the lap sim on each event's geometry with a nominal car.
+    """Minimum corner speed (km/h) from the lap sim on each event's geometry with a nominal car.
 
-    The nominal car for event e is the median of the pole-lap calibrations of the *other*
-    events of the same season (restricted to `train_keys` inside cross-validation), so no
-    information from event e's speeds is used. Air density and mass are event conditions.
+    The nominal car is the median pole-lap calibration of the season's other events (only `train_keys` inside
+    cross-validation), so none of the event's own speeds are used; air density and mass are the event's.
     """
     cal = {}
     for k, e in events.items():
@@ -590,12 +621,8 @@ def section_rate_summary(sec: pd.DataFrame, n_boot: int = 2000, seed: int = 21,
                          target: str = TARGET_TEAM, min_events: int = 5) -> tuple[dict[str, Any], dict[str, Any]]:
     """Per season and team: time lost to pole in each section as a % of the pole lap's time there.
 
-    Rates are ratios of sums over events (seconds lost / seconds spent), so an event where a
-    section is short does not get the same weight as one where it is long. The bootstrap
-    resamples events. Also reports how each team's straight-line rate compares with its
-    corner rate, which separates a uniform deficit from a section-specific one, and the
-    target's straight-line rate over the highest of any other team's on the same tracks
-    (`straight_vs_field`).
+    Rates are ratios of sums over events, so events where a section is short weigh less; the straights-to-corners
+    ratio separates a uniform deficit from a section-specific one. Also returns `straight_vs_field` per season.
     """
     rng = np.random.default_rng(seed)
     out: dict[str, Any] = {}
@@ -639,12 +666,9 @@ def straight_vs_field(sec: pd.DataFrame, target: str, rivals: list[str], n_boot:
                       season: int = 0) -> dict[str, Any]:
     """The target's straight-line loss rate over the highest of any rival's, on the same tracks.
 
-    Every team is summed over the events where the target has a passing lap, so the track mix
-    is the same for all, and the bootstrap resamples those events once for every team (paired).
-    The maximum over rivals is taken inside each draw, so the interval covers "than any other
-    team". A rival with no passing lap at an event has no row there and drops out of that
-    event's sums. The draws come from their own random stream, so adding this comparison does
-    not move any other interval.
+    Every team is summed over the events where the target has a passing lap, and the paired bootstrap takes the
+    maximum over rivals inside each draw, so the interval covers "than any other team". The draws have their
+    own random stream so this comparison does not move any other interval.
     """
     st = sec[sec["section"] == "straights"]
     piv_l = st.pivot_table(index="round", columns="team", values="loss_s", aggfunc="sum")
@@ -652,6 +676,7 @@ def straight_vs_field(sec: pd.DataFrame, target: str, rivals: list[str], n_boot:
     rounds = piv_l.index[piv_l[target].notna()]
     teams = [target] + list(rivals)
     L = piv_l.reindex(index=rounds, columns=teams).to_numpy()
+    # A rival with no passing lap at an event has no row there and drops out of that event's sums
     R = np.where(np.isnan(L), np.nan, piv_r.reindex(index=rounds, columns=teams).to_numpy())
     point = 100 * np.nansum(L, 0) / np.nansum(R, 0)
     idx = np.random.default_rng([seed, season]).integers(0, len(rounds), size=(n_boot, len(rounds)))
@@ -660,13 +685,39 @@ def straight_vs_field(sec: pd.DataFrame, target: str, rivals: list[str], n_boot:
     best = np.nanmax(boot[:, 1:], axis=1)
     ratio_b = boot[:, 0] / np.where(best > 1e-9, best, np.nan)
     j = int(np.nanargmax(point[1:]))
+    # Whole-lap rates on the same tracks, so "as slow over a lap" compares like with like
+    on = sec[sec["round"].isin(rounds)]
+
+    def lap_rate(team: str) -> float:
+        t = on[on["team"] == team]
+        return float(100 * t["loss_s"].sum() / t["reference_time_s"].sum()) if len(t) else float("nan")
+
     return _r({
         "next_team": teams[1 + j], "next_rate_pct": float(point[1 + j]), "target_rate_pct": float(point[0]),
+        "next_lap_rate_pct": lap_rate(teams[1 + j]), "target_lap_rate_pct": lap_rate(target),
         "ratio": float(point[0] / point[1 + j]) if point[1 + j] > 0 else float("nan"),
         "ratio_ci90": list(boot_ci(ratio_b, len(rounds))),
         "p_ratio_above_2": float(np.nanmean(ratio_b > 2)),
         "n_rivals": len(rivals), "n_events": int(len(rounds)),
     }, 4)
+
+
+def method_settings() -> dict[str, Any]:
+    """Settings the report text quotes, read from the code that uses them so the two cannot drift."""
+    return _r({
+        "interval_level": LEVEL,
+        "interval_z": INTERVAL_Z,
+        "corner_window_m": float(EXIT_M[1]),
+        "representative_pct": 100 * REPRESENTATIVE_LAP_RATIO,
+        "clip_min_decel_m": MIN_PERSIST_M,
+        "powertrain_min_straight_m": MIN_FIT_POSITIONS * GRID_STEP_M,
+        "powertrain_min_speed_span_kmh": MIN_FIT_SPEED_SPAN_KMH,
+        "did_noise_ratio_max": NOISE_RATIO_MAX,
+        "did_alpha": MDE_ALPHA,
+        "did_power": MDE_POWER,
+        "fuel_kg": REGULATIONS[max(REGULATIONS)].quali_fuel_kg,
+        "calibration_prior_sd_log": {k: sd for k, (_, sd) in DEFAULT_PRIORS.items()},
+    }, 6)
 
 
 def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) -> dict[str, Any]:
@@ -697,8 +748,8 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
     timing = tables["timing"] if not tables["timing"].empty else drivers
     # FIA 107% rule: slower laps (crash, red flag, a wet session segment) are not pace
     best_all = timing.groupby(["season", "round"])["lap_time_s"].transform("min")
-    result["laps_outside_107pct"] = int((timing["lap_time_s"] > 1.07 * best_all).sum())
-    timing = timing[timing["lap_time_s"] <= 1.07 * best_all]
+    result["laps_outside_107pct"] = int((timing["lap_time_s"] > REPRESENTATIVE_LAP_RATIO * best_all).sum())
+    timing = timing[timing["lap_time_s"] <= REPRESENTATIVE_LAP_RATIO * best_all]
     st = supertime_table(timing)
     result["supertimes"] = _r(st.to_dict("records"), 3)
     teams = tables["teams"]
@@ -775,7 +826,7 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
             "holm_floor_lead": _r(len(effects) * min(lead_floor), 4) if effects else None,
         }
 
-    # Corner model, team deficits, wind, Shapley
+    # Corner model, team corner deficits, Shapley
     corners = tables["corners"]
     corners = corners[corners["geometry_ok"].astype(bool) & corners["team"].notna()]
     if "speed_ok" in corners:  # minimum speeds the GPS cross-check rejects (stuck speed channel)
@@ -881,7 +932,7 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         majors = pd.read_csv(upgrades_csv)
         majors = majors[majors["major_performance_upgrade"] == "major"]
         result["upgrade_components"] = [
-            _r(x, 4) for x in (upgrade_component_shift(teams, tables["accel"], int(r.season), r.grand_prix)
+            _r(x, 4) for x in (upgrade_component_shift(teams, int(r.season), r.grand_prix)
                                for r in majors.itertuples()) if x is not None
         ]
 
@@ -897,6 +948,7 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
     # Aero map, sensitivities, energy, race pace
     result["aero_map"] = aero_map(teams, events)
     result["circuit_sensitivities"] = _r(circuit_sensitivities(events), 4)
+    result["surrogate_summary"] = surrogate_summary(events)
     result["calibration_accuracy"] = _r(sorted(
         [{"season": e["season"], "round": e["round"], "event": e["event"], "driver": d, "team": ls["team"],
           "is_pole": d == e["pole"]["driver"], "rmse_kmh": ls["rmse_kmh"], "lap_time_error_s": ls["lap_time_error_s"],
@@ -930,6 +982,11 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         "events_geometry_failed": sorted({e["event"] + f" {e['season']}" for e in events.values() if not e["geometry_ok"]}),
         "gps_lag_s_median": _r(float(d_all["q_gps_lag_s"].median()), 3),
         "projection_rms_m_median": _r(float(d_all["q_projection_rms_m"].median()), 2),
+        # Which checks the rejected laps fail (a lap can fail several), and how much of the
+        # archive's GPS stream is real fixes rather than filled in between them
+        "laps_failed_by_check": failures_by_check({m: d_all[f"q_{m}"].to_numpy(float) for m in LAP_CHECKS if f"q_{m}" in d_all}),
+        "gps_fixes_per_lap_median": _r(float(d_all["q_n_gps_fixes"].median()), 0),
+        "samples_per_lap_median": _r(float(d_all["q_n_samples"].median()), 0),
     }
     if "q_sector_time_error_s" in d_all:
         # Independent check of the alignment: aligned clock vs official sector times, passing laps
@@ -944,7 +1001,11 @@ def analyse(out_dir: Path = PROCESSED_DIR, upgrades_csv: Path = UPGRADES_CSV) ->
         if len(gap):
             top = ok.loc[gap.idxmax()]
             result["data_quality"].update({"max_clock_offset_m": _r(float(gap.max()), 1),
-                                           "max_clock_offset_lap": f"{top['driver']} at the {top['season']} {top['event']}"})
+                                           "max_clock_offset_lap": f"{top['driver']} at the {top['season']} {top['event']}",
+                                           "clock_offset_m_median": _r(float(gap.median()), 1)})
+    # Settings the report quotes, and how often its interval method covers the truth by sample size
+    result["method"] = method_settings()
+    result["bootstrap_coverage"] = _r(coverage_check(), 2)
     skipped_path = out_dir / "skipped.json"
     result["skipped_events"] = json.loads(skipped_path.read_text()) if skipped_path.exists() else []
     (out_dir / "season.json").write_text(json.dumps(_r(result, 6), separators=(",", ":"), allow_nan=False), encoding="utf-8")

@@ -15,12 +15,11 @@ const OUT = process.argv[3] || "docs/img";
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const PORT = 9333;
 
-// [output name, page path, chart id, control to click first (or null)]. The track detail
-// opens on Silverstone 2026 by default.
+// [output name, chart id]. The track detail opens on Silverstone 2026 by default.
 const FIGURES = [
-  ["loss-rates", "", "ch-rates", null],
-  ["silverstone-gap", "", "ch-rival", null],
-  ["silverstone-straights", "", "ch-ftl", null],
+  ["loss-rates", "ch-rates"],
+  ["silverstone-gap", "ch-rival"],
+  ["silverstone-straights", "ch-ftl"],
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -72,14 +71,9 @@ try {
   mkdirSync(OUT, { recursive: true });
   for (const scheme of ["light", "dark"]) {
     await c.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
-    let loaded = null;
-    for (const [name, path, chart, toggle] of FIGURES) {
-      if (loaded !== path) {
-        await c.send("Page.navigate", { url: new URL(path, SITE).href });
-        await sleep(4000); // fonts, Plotly and every chart
-        loaded = path;
-      }
-      if (toggle) await c.send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(toggle)}).click()` });
+    await c.send("Page.navigate", { url: SITE });
+    await sleep(4000); // fonts, Plotly and every chart
+    for (const [name, chart] of FIGURES) {
       // Sticky bars would cover the figure; take them out of the flow for the capture
       const box = (await c.send("Runtime.evaluate", {
         returnByValue: true,

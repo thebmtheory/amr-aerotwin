@@ -1,7 +1,6 @@
 """Process one Grand Prix end to end: qualifying laps, physics, lap sim, comparisons, race pace.
 
-Every stage that can fail independently is isolated, and failures are recorded in
-`summary["warnings"]` rather than aborting the season build.
+A stage that can fail on its own adds a line to `summary["warnings"]` instead of stopping the season build.
 """
 
 from __future__ import annotations
@@ -34,6 +33,7 @@ from amr_aerotwin.modeling.lap_compare import compare_laps
 from amr_aerotwin.modeling.pod import PODReducedOrderModel
 from amr_aerotwin.modeling.powertrain import event_power_drag_rows, wind_rotation_test
 from amr_aerotwin.modeling.race_pace import fit_race_pace
+from amr_aerotwin.modeling.surrogate import lap_time_emulator
 from amr_aerotwin.modeling.validation import (
     car_data_stall_kmh,
     check_lap,
@@ -140,6 +140,7 @@ def _align_all(raws: dict[str, tuple[Any, LapMeta, Any]], ref: Any, warnings: li
 
 
 def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[dict[str, AlignedLap], Any, pd.DataFrame, list[str]]:
+    """Each driver's fastest valid qualifying lap, aligned: (laps by driver, reference line, session laps, warnings)."""
     laps = repo.session_laps(year, event, QUALI)
     amb = repo.session_ambient(year, event, QUALI)
     try:
@@ -170,11 +171,10 @@ def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[
         raws[drv] = (raw, meta, lap_ambient(r, amb))
     order = sorted(raws, key=lambda d: raws[d][1].lap_time_s)
 
-    # The reference line comes from the fastest lap whose telemetry builds one. That lap is not
-    # checked yet, and a broken one (frozen speed, a GPS lag at the search bound) skews the line
-    # length and every other lap's line gaps (2026 Monza: 2 of 22 laps passed). So all laps are
-    # aligned and checked, the reference is rebuilt from the fastest lap that passes, and the
-    # laps are aligned again.
+    # The first reference line comes from the fastest lap whose telemetry builds one. That lap is
+    # not checked yet, and a broken one (frozen speed, GPS lag at the search bound) skews the line
+    # length and every other lap's line gaps (2026 Monza: 2 of 22 laps passed), so the reference is
+    # rebuilt below from the fastest lap that passes and the laps are aligned again
     ref, ref_drv = None, None
     for d in order:
         try:
@@ -211,9 +211,8 @@ def _load_quali_laps(repo: TelemetryRepository, year: int, event: str) -> tuple[
 def corner_positions(repo: TelemetryRepository, year: int, event: str, ref: Any) -> tuple[np.ndarray, list[str]]:
     """Official corner markers projected onto the reference line: distances (m, ascending) and labels.
 
-    Anything that splits a lap into corners and straights must use these exact distances: the
-    event summary stores them rounded to 0.1 m, and a marker moved by a few centimetres can move a
-    5 m grid cell from one corner window to the next.
+    Corner and straight splits must use these exact distances, not the summary's (rounded to 0.1 m):
+    a few centimetres can move a 5 m grid cell into the next corner window.
     """
     corners = repo.corners(year, event)
     c_s, _ = project_onto_reference(corners["x_m"].to_numpy(), corners["y_m"].to_numpy(), ref)
@@ -227,15 +226,19 @@ def _export_trace(arr: np.ndarray, nd: int = 2) -> list:
 
 
 def straight_windows(ref_state: VehicleState) -> list[tuple[int, int]]:
-    """Index windows (start, end inclusive) of the main straights on the reference lap, extended
-    20 points past the end so a car that brakes later is still covered."""
+    """Index windows (start, end inclusive) of the main straights on the reference lap.
+
+    Each runs 20 points (100 m) past the straight's end so a car that brakes later is still covered.
+    """
     n = len(ref_state.distance_m)
     return [(int(seg[0]), int(min(seg[-1] + 20, n - 1))) for seg in straight_segments(ref_state, min_length_m=350.0, trim_m=0.0)]
 
 
 def _straight_speed_deltas(states: dict[str, VehicleState], windows: list[tuple[int, int]]) -> tuple[dict[str, float], float]:
-    """Each car's peak speed on the main straights vs the median of the *other teams'* cars
-    (km/h, averaged over straights). Also returns the all-car median peak speed."""
+    """Each car's peak speed on the main straights minus the other teams' median (km/h, mean over straights).
+
+    Also returns the all-car median peak speed.
+    """
     if not windows:
         return {}, float("nan")
     peaks = {d: np.array([float(np.max(st.speed_smooth_ms[lo:hi + 1]) * 3.6) for lo, hi in windows]) for d, st in states.items()}
@@ -249,7 +252,8 @@ def _straight_speed_deltas(states: dict[str, VehicleState], windows: list[tuple[
 
 def _calibrate(state: VehicleState, kappa: np.ndarray, use_low_drag: bool, mh: bool) -> dict[str, Any]:
     lap = state.lap
-    base = VehicleParams(state.mass_kg, 4.5, 1.3, 1.8, 650e3, state.rho_kg_m3,
+    # Starting point for the fit; the priors are DEFAULT_PRIORS in modeling/calibration.py
+    base = VehicleParams(state.mass_kg, cla_m2=4.5, cda_m2=1.3, mu=1.8, power_w=650e3, rho_kg_m3=state.rho_kg_m3,
                          low_drag_cda_m2=1.0 if use_low_drag else None)
     mask = lap.drs > 0.5 if use_low_drag else None
     cal = calibrate_lapsim(lap.distance_m, kappa, lap.speed_ms, base, lap.meta.lap_time_s, mask, lap.lap_length_m)
@@ -349,7 +353,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     vmin = {d: corner_min_speeds(st, c_s) for d, st in states.items()}
     flag_corner_speeds(vmin)
 
-    # ------------------------------------------------------------------ grip per team
+    # Grip per team
     team_of = {d: lp.meta.team for d, lp in good.items()}
     color_of = {lp.meta.team: lp.meta.team_color for lp in good.values()}
     pts = {}
@@ -371,7 +375,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     windows = straight_windows(pole_state)
     straight_delta, straight_peak_kmh = _straight_speed_deltas(states, windows)
 
-    # ------------------------------------------------------------------ energy + acceleration bands
+    # Straight-line energy, power and drag
     energy = {d: lap_energy_summary(st) for d, st in states.items()}
     accel_rows = event_power_drag_rows(states, pole_state)
     accel_rows["season"], accel_rows["round"], accel_rows["event"] = year, round_no, event
@@ -380,7 +384,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     if not profile_rows.empty:
         profile_rows["season"], profile_rows["round"], profile_rows["event"] = year, round_no, event
 
-    # ------------------------------------------------------------------ driver + team tables
+    # Driver and team tables
     drows = []
     for d, lp in laps.items():
         e = energy.get(d, {})
@@ -418,7 +422,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         })
     team_rows = pd.DataFrame(trows)
 
-    # ------------------------------------------------------------------ track character
+    # Track character
     high_share = float(np.mean(pole_state.regime == HIGH_SPEED_CORNER))
     full_throttle = float(np.mean(pole.throttle_pct >= 98.0))
     straight_share = float(np.mean(pole_state.regime == STRAIGHT))
@@ -426,7 +430,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
     team_rows["straight_peak_kmh"] = straight_peak_kmh
     team_rows["geometry_ok"] = geo_ok
 
-    # ------------------------------------------------------------------ corner rows
+    # Corners
     crows = []
     length = ref.length_m
     prev = np.roll(c_s, 1)
@@ -455,7 +459,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             })
     corner_rows = pd.DataFrame(crows)
 
-    # ------------------------------------------------------------------ lap comparison (AMR vs pole)
+    # Event summary
     summary: dict[str, Any] = {
         "season": year, "event": event, "round": round_no,
         "date": str(session_laps["lSD"].dropna().min())[:10] if "lSD" in session_laps else None,
@@ -480,6 +484,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         "grip_points": _r(lim[["team", "driver", "q_pa", "a_comb_ms2", "speed_kmh"]].to_dict("list"), 2) if len(lim) else {},
     }
 
+    # Lap comparison, Aston Martin vs pole
     amr = {d: lp for d, lp in good.items() if lp.meta.team == TARGET_TEAM}
     amr_best = min(amr, key=lambda d: amr[d].meta.lap_time_s) if amr else None
     if amr_best:
@@ -501,7 +506,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             "total_delta_s": _r(cmp_.total_delta_s, 3),
         }
 
-    # ------------------------------------------------------------------ every team's best lap vs pole, by section
+    # Every team's best lap vs pole, by section
     srows = []
     for team in sorted(set(team_of.values())):
         drv_best = min((d for d in good if team_of[d] == team), key=lambda d: good[d].meta.lap_time_s)
@@ -513,13 +518,13 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
                           "section": r["speed_class"], "loss_s": r["time_s"], "reference_time_s": r["reference_time_s"]})
     section_rows = pd.DataFrame(srows)
 
-    # ------------------------------------------------------------------ lap sim calibration + sensitivities
+    # Lap sim calibration and sensitivities
     sims = {}
     if geo_ok:
         for d in dict.fromkeys(x for x in (pole_drv, amr_best) if x is not None):
             try:
                 sims[d] = _calibrate(states[d], kappa, regs.has_drs, mh=run_mcmc and d == amr_best)
-            except Exception as err:  # noqa: BLE001 - one failed fit must not drop the event
+            except Exception as err:  # one failed fit must not drop the event
                 warns.append(f"lap sim calibration failed for {d}: {err}")
     if sims:
         key = amr_best if amr_best in sims else pole_drv
@@ -529,6 +534,13 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         cda_pct = np.linspace(-10, 10, 9)
         grid = iso_lap_time_grid(pole.distance_m, kappa, p_obj, cla_pct, cda_pct, mask, length)
         summary["iso_lap_time"] = {"cla_pct": _r(cla_pct, 1), "cda_pct": _r(cda_pct, 1), "delta_s": _r(grid, 4), "car": key}
+        # GP emulator of the same car's lap time over +-15% in mu, ClA, CdA and power, checked on
+        # held-out simulator runs against the linear surrogate the 1% sensitivities give
+        try:
+            summary["surrogate"] = {"car": key, **lap_time_emulator(pole.distance_m, kappa, p_obj, mask, length,
+                                                                    sims[key]["sensitivities"], seed=0)}
+        except Exception as err:  # a failed emulator must not drop the event
+            warns.append(f"lap-time emulator failed for {key}: {err}")
         summary["sandbox"] = {
             "car": key, "distance_m": _r(pole.distance_m, 1), "curvature": _r(kappa, 6),
             "low_drag_mask": _r(mask.astype(int), 0) if mask is not None else None,
@@ -539,7 +551,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         }
     summary["lapsim"] = {d: {k: v for k, v in s.items() if not k.startswith("_")} for d, s in sims.items()}
 
-    # ------------------------------------------------------------------ POD across the field
+    # POD across the field
     try:
         snap_d = sorted(good, key=lambda d: good[d].meta.lap_time_s)
         snap = np.vstack([good[d].speed_ms * 3.6 for d in snap_d])
@@ -554,10 +566,10 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             "reconstruction_rmse_kmh": _r(pod.reconstruction_rmse, 2),
             "loo_rmse_kmh": _r(pod.loo_reconstruction_rmse, 2),
         }
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:
         warns.append(f"POD failed: {err}")
 
-    # ------------------------------------------------------------------ energy straights (AMR + pole)
+    # Energy on the straights, Aston Martin and pole
     summary["energy"] = {
         d: _r(straight_energy_metrics(states[d]).to_dict("list"), 2) for d in dict.fromkeys([pole_drv, amr_best]) if d
     }
@@ -565,7 +577,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
         d: _export_trace(states[d].speed_smooth_ms * 3.6, 1) for d in dict.fromkeys([pole_drv, amr_best]) if d
     }
 
-    # ------------------------------------------------------------------ race pace
+    # Race pace
     race_rows = pd.DataFrame()
     try:
         rl = repo.session_laps(year, event, RACE)
@@ -585,7 +597,7 @@ def process_event(repo: TelemetryRepository, year: int, event: str, round_no: in
             warns.append("race pace skipped (wet or insufficient green-flag slick running)")
     except DataUnavailableError as err:
         warns.append(f"race data unavailable: {err}")
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:
         warns.append(f"race pace failed: {err}")
 
     summary["wind_rotation_test"] = _r(wind_test, 4) if wind_test else None
@@ -604,6 +616,6 @@ def safe_process_event(repo: TelemetryRepository, year: int, event: str, round_n
     """Process an event; on failure return the reason as a string instead of raising."""
     try:
         return process_event(repo, year, event, round_no, run_mcmc)
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:
         log.error("event %s %s failed:\n%s", year, event, traceback.format_exc())
         return f"{type(err).__name__}: {err}"

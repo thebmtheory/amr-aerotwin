@@ -1,10 +1,8 @@
 """Spatial alignment of laps onto a shared reference line, in SI units.
 
-Each car's odometer differs (racing line, wheel radius), so two laps compared at the same raw
-`distance` value can be 10-25 m apart on track. Instead, every sample is projected onto one
-reference line (by default the pole lap) and all channels are resampled on that arc length.
-
-Raw archive units: position X/Y/Z in decimetres, speed in km/h, time in seconds from the line.
+Odometers differ between cars (racing line, wheel radius), so the same raw `distance` can be 10-25 m apart
+on track; each lap is projected onto one reference path and its channels resampled on that arc length.
+Raw archive units: X/Y/Z in decimetres, speed in km/h, time in seconds from the line.
 """
 
 from __future__ import annotations
@@ -19,7 +17,13 @@ from scipy.signal import savgol_filter
 from scipy.spatial import cKDTree
 
 from amr_aerotwin.domain import AlignedLap, AmbientState, LapMeta
-from amr_aerotwin.physics.kinematics import gps_position_splines, gps_spline_kinematics
+from amr_aerotwin.physics.kinematics import (
+    GPS_LAM,
+    MIN_GPS_FIXES,
+    gps_position_splines,
+    gps_spline_kinematics,
+    odd_window,
+)
 
 
 @dataclass(frozen=True)
@@ -75,8 +79,9 @@ def parse_raw_lap(raw_tel: dict[str, Any]) -> RawLap:
     # braking, so it is read as 0% when the brake is on and capped at 100% otherwise.
     thr = col("throttle")
     thr = np.where(thr > 100.5, np.where(col("brake") > 0.5, 0.0, 100.0), thr)
-    # The archive linearly interpolates GPS onto car-data timestamps. Original fixes are the
-    # samples whose decimetre coordinates are whole numbers.
+    # Between GPS fixes the archive fills in positions on the car-data timestamps (a quadratic
+    # spline in time reproduces them). Original fixes are the samples whose decimetre
+    # coordinates are whole numbers.
     xyz = np.column_stack([col("x", np.nan), col("y", np.nan), col("z", np.nan)])
     is_fix = np.all(np.isfinite(xyz) & (np.mod(xyz, 1.0) == 0.0), axis=1)
     order = np.argsort(t, kind="stable")
@@ -106,15 +111,14 @@ def estimate_lap_length_m(raw: RawLap, lap_time_s: float) -> float:
 
 
 GPS_LAG_SEARCH_S = np.round(np.arange(-0.5, 0.5001, 0.01), 2)
-GPS_LAM = 0.2
-MIN_FIXES = 50
 
 
 def longest_frozen_run_m(raw: RawLap, sel: NDArray[np.bool_], s: NDArray[np.float64]) -> float:
-    """Distance covered by the longest run of samples whose speed and rpm both repeat exactly.
+    """Distance (m) covered by the longest run of samples whose speed and rpm both repeat exactly.
 
     Real channels never hold identical values for long (90% of laps stay under ~40 m); a
-    frozen car-data stream does (Baku 2026: 140-180 m of constant speed and rpm)."""
+    frozen car-data stream does (Baku 2026: 140-180 m of constant speed and rpm).
+    """
     v, rpm, ss = raw.speed_ms[sel], raw.rpm[sel], s[sel]
     same = (np.diff(v) == 0) & (np.diff(rpm) == 0)
     best, start = 0.0, None
@@ -128,18 +132,13 @@ def longest_frozen_run_m(raw: RawLap, sel: NDArray[np.bool_], s: NDArray[np.floa
 
 
 def estimate_gps_lag_s(raw: RawLap, lap_time_s: float, lam: float = GPS_LAM) -> tuple[float, float]:
-    """Time offset tau such that a GPS fix stamped t matches the car-data stream at t + tau.
+    """Offset tau (s) best aligning GPS-derived speed with wheel speed, and the RMS speed error (m/s).
 
-    Found by matching speed differentiated from the GPS path against the wheel-speed channel.
-    In the public archive the median is about +0.11 s (lap-to-lap spread ~0.05 s). This cannot
-    tell a clock offset from processing lag in the speed channel; either way, placing car data
-    by GPS position needs the correction, or samples move ~9 m at 300 km/h. (The archive's
-    odometer `distance`, integrated from speed, is unaffected.) When speed is nearly constant the
-    offset is not identifiable; if no shift improves on tau = 0 by at least 2%, 0 is
-    returned. Returns (tau, RMS speed error m/s).
+    A fix stamped t matches the car data at t + tau; the archive median is about +0.11 s (~9 m at 300 km/h).
+    tau = 0 is kept unless a shift improves on it by 2%: the offset is not identifiable at near-constant speed.
     """
     f = raw.is_gps_fix
-    if int(f.sum()) < MIN_FIXES:
+    if int(f.sum()) < MIN_GPS_FIXES:
         return 0.0, float("nan")
     t_eval = np.linspace(1.0, lap_time_s - 1.0, 3000)
     _, v_gps = gps_spline_kinematics(raw.time_s[f], raw.x_m[f], raw.y_m[f], lap_time_s, t_eval, lam)
@@ -166,17 +165,20 @@ def _reference_from_odometer(raw: RawLap, lap_time_s: float, step_m: float) -> R
     keep = np.concatenate([[True], np.diff(d_ext) > 0])
     x = np.interp(grid, d_ext[keep], x_ext[keep])
     y = np.interp(grid, d_ext[keep], y_ext[keep])
-    w = max(5, int(round(45.0 / step_m)) | 1)
+    w = odd_window(45.0, step_m)
     return ReferenceLine(grid, savgol_filter(x, w, 3, mode="wrap"), savgol_filter(y, w, 3, mode="wrap"), length)
 
 
-def build_reference_line(raw: RawLap, lap_time_s: float, step_m: float = 5.0) -> ReferenceLine:
+GRID_STEP_M = 5.0  # spacing of the shared distance grid every lap is resampled onto
+
+
+def build_reference_line(raw: RawLap, lap_time_s: float, step_m: float = GRID_STEP_M) -> ReferenceLine:
     """Closed reference path: shape from the lag-corrected GPS fixes, scale from the odometer.
 
     s = 0 is the car position at t = 0 (the timing line).
     """
     f = raw.is_gps_fix
-    if int(f.sum()) < MIN_FIXES:
+    if int(f.sum()) < MIN_GPS_FIXES:
         return _reference_from_odometer(raw, lap_time_s, step_m)
     tau, _ = estimate_gps_lag_s(raw, lap_time_s)
     sx, sy = gps_position_splines(raw.time_s[f] + tau, raw.x_m[f], raw.y_m[f], lap_time_s, GPS_LAM)
@@ -249,15 +251,14 @@ def align_lap(
 ) -> AlignedLap:
     """Resample one lap onto the reference grid using the measured timing channel.
 
-    Distance along the reference comes from projecting the lag-corrected GPS fixes; between
-    fixes the high-rate odometer supplies the shape (its slowly drifting offset from the
-    projected distance is median-filtered and interpolated).
+    Distance comes from the projected, lag-corrected GPS fixes; between fixes the high-rate odometer gives
+    the shape, shifted by its smoothed, slowly drifting offset from the projected distance.
     """
     length = ref.length_m
     f = raw.is_gps_fix
     tau, lag_rms = estimate_gps_lag_s(raw, meta.lap_time_s)
     t_end = meta.lap_time_s
-    if int(f.sum()) >= MIN_FIXES:
+    if int(f.sum()) >= MIN_GPS_FIXES:
         t_fix = raw.time_s[f] + tau
         s_fix, offset = project_onto_reference(raw.x_m[f], raw.y_m[f], ref)
         s_fix = unwrap_lap_distance(s_fix, length)
@@ -298,7 +299,7 @@ def align_lap(
         raise ValueError(f"Too few usable samples after projection for {meta.lap_id}")
 
     grid = ref.distance_m
-    # Time: measured channel, re-timed so the car is at the line at 0 and the official lap time.
+    # Time: measured channel, re-timed so the car is at the line at 0 and at the official lap time
     s_t = np.concatenate([[0.0], s_in, [length]])
     t_t = np.concatenate([[0.0], retime(raw.time_s[inside]), [meta.lap_time_s]])
     mono = np.concatenate([[True], np.diff(t_t) > 0]) & np.concatenate([[True], np.diff(s_t) > 0])
@@ -317,7 +318,7 @@ def align_lap(
     else:
         x_grid, y_grid = lin(raw.x_m), lin(raw.y_m)
 
-    # Genuine data-quality checks (each can fail; thresholds live in modeling/validation.py)
+    # Data-quality metrics; the bounds that gate a lap are LAP_CHECKS in modeling/validation.py
     t_in = retime(raw.time_s[inside])
     pred_end = t_in[-1] + (length - s_in[-1]) / max(v_in[-1], 1.0)
     inv_v = 1.0 / np.maximum(v_in, 1.0)

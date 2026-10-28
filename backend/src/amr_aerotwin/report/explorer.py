@@ -1,19 +1,8 @@
 """Per-track, per-driver data for the report's track-by-track and track-detail views.
 
-At every event, each Aston Martin driver's fastest qualifying lap that passed the data checks
-is compared with the event's reference lap (the fastest lap that passes every check), and the
-other teams' fastest passing laps form the field. Section and corner times come from the
-timing channel on a shared distance grid, so they add up to the gap between the two laps.
-Corner minimum speeds are used only where the speed channel agrees with GPS; straights are
-the reference lap's full-throttle runs.
-
-Two outputs:
-- an index, loaded with the page, holding everything the multi-track views add up (lap
-  times and ranks, section losses of every team, corner-class and straight-line speed
-  differences as sums and counts, race pace). Sums rather than means, so any set of tracks
-  combines exactly in the browser.
-- one file per event, loaded when that track is opened, with the single-track detail (speed
-  traces, track map, corner table, straight speeds, team order).
+Each Aston Martin driver's fastest qualifying lap, where it passes the data checks, is compared with the event's
+reference lap (the fastest lap that passes every check). The index loads with the page and holds sums and counts,
+so the browser can combine any set of tracks exactly; each event's detail file loads when that track is opened.
 """
 
 from __future__ import annotations
@@ -21,7 +10,6 @@ from __future__ import annotations
 import ast
 import json
 import logging
-import re
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -30,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from amr_aerotwin.data.repository import DataUnavailableError, TelemetryRepository
-from amr_aerotwin.domain import TARGET_TEAM
+from amr_aerotwin.domain import REPRESENTATIVE_LAP_RATIO, TARGET_TEAM, slug
 from amr_aerotwin.modeling.lap_compare import compare_laps, cumulative_gap, segment_time_loss
 from amr_aerotwin.modeling.validation import check_lap, corner_min_speeds, flag_corner_speeds
 from amr_aerotwin.physics.dynamics import HIGH_SPEED_MIN_KMH, LOW_SPEED_MAX_KMH, estimate_vehicle_state, lap_curvature
@@ -46,10 +34,9 @@ CLASSES = ["high", "medium", "low"]
 FULL_THROTTLE_PCT = 98.0
 TRACE_STEP = 2  # every 2nd point of the 5 m grid (10 m)
 STRAIGHT_STEP = 2  # straights are short; 10 m as well
-REPRESENTATIVE = 1.07  # laps slower than 107% of the fastest are not pace
 STRAIGHT_MIN_M = 400.0  # the straights shown: full-throttle runs at least this long
 
-# Official turn numbers come from the timing archive; names are the circuit's own.
+# Official turn numbers come from the timing archive; names are the circuit's own
 CORNER_NAMES: dict[str, dict[str, str]] = {
     "Silverstone": {
         "T1": "Abbey", "T2": "Farm", "T3": "Village", "T4": "The Loop", "T5": "Aintree", "T6": "Brooklands",
@@ -63,8 +50,8 @@ STRAIGHT_NAMES: dict[str, dict[str, str]] = {"Silverstone": {"T5": "Wellington S
 
 # Short reader-facing names for the lap checks (modeling.validation.LAP_CHECKS)
 CHECK_LABELS = {
-    "projection_rms_m": "GPS trace off the track line", "finish_line_gap_m": "GPS position at the line",
-    "start_line_gap_m": "GPS position at the line", "line_gap_mismatch_m": "lap clock mismatch",
+    "projection_rms_m": "GPS trace off the track line", "finish_line_gap_m": "GPS position at the finish line",
+    "start_line_gap_m": "GPS position at the start line", "line_gap_mismatch_m": "lap clock mismatch",
     "sector_time_error_s": "sector times do not match", "speed_time_consistency_pct": "speed and timing channels disagree",
     "gps_speed_rms_ms": "GPS and wheel speed disagree", "max_sample_gap_m": "telemetry dropout",
     "speed_trap_minus_max_kmh": "speed trap above telemetry peak", "frozen_run_m": "frozen telemetry",
@@ -72,17 +59,11 @@ CHECK_LABELS = {
 }
 
 
-def slug(event: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", event.lower()).strip("-")
-
-
 def full_throttle_speed_loss(v_kmh: np.ndarray, throttle: np.ndarray) -> float:
     """Largest drop below the running peak speed while still at full throttle (km/h).
 
-    At constant drive power a car below its terminal speed only accelerates on a level
-    straight: drag alone flattens the speed, it does not make it fall. A grade can (uphill),
-    but every car meets the same grade at the same place, so a fall that the other cars do not
-    show means this car's drive power fell (energy deployment ended or the car is harvesting).
+    At constant power, drag only flattens the speed on the level. A climb can make it fall, but for every car at
+    the same place, so a drop the others do not show means this car's power fell (deployment ended or harvesting).
     """
     peak = np.maximum.accumulate(v_kmh)
     drop = np.where(throttle >= FULL_THROTTLE_PCT, peak - v_kmh, 0.0)
@@ -156,7 +137,7 @@ def explorer_event(ev: dict[str, Any], timing: pd.DataFrame, sections: pd.DataFr
                         "pole_kmh": vmin[ref_drv][i]["wheel_kmh"], "pole_ok": bool(vmin[ref_drv][i]["ok"]),
                         "field_median_kmh": float(np.median(fm)) if fm else None, "n_field": len(fm)})
 
-    # Straights: the reference lap's full-throttle runs of 400 m or more, clear of the timing line
+    # Straights: the reference lap's full-throttle runs of at least STRAIGHT_MIN_M, clear of the timing line
     ref_state = states[ref_drv]
     n = len(ref_lap.distance_m)
     straights: list[dict[str, Any]] = []
@@ -247,7 +228,7 @@ def explorer_event(ev: dict[str, Any], timing: pd.DataFrame, sections: pd.DataFr
             amr_timing[d] = {"lap_time_s": float(r["lap_time_s"]), "gap_s": float(r["lap_time_s"]) - fastest,
                              "gap_pct": 100 * (float(r["lap_time_s"]) / fastest - 1), "rank": int(i) + 1, "n_drivers": int(len(tm)),
                              # FIA 107% rule, as in the season analysis: a slower lap (crash, red flag) is not pace
-                             "representative": bool(float(r["lap_time_s"]) <= REPRESENTATIVE * fastest),
+                             "representative": bool(float(r["lap_time_s"]) <= REPRESENTATIVE_LAP_RATIO * fastest),
                              "segment": None if pd.isna(r.get("segment")) else str(r["segment"]),
                              "telemetry": d in drivers, "reason": None if d in drivers else no_telemetry_reason(d, warnings)}
 
@@ -314,7 +295,7 @@ def _job(args: tuple[str, str, str | None]) -> tuple[str, Any, Any]:
     repo = TelemetryRepository(Path(cache_dir)) if cache_dir else TelemetryRepository()
     try:
         index, detail = explorer_event(ev, timing, sections, repo)
-    except Exception as err:  # noqa: BLE001  (one event must not stop the build; it is reported)
+    except Exception as err:  # one event must not stop the build; it is reported
         return Path(ev_path).stem, None, {"key": Path(ev_path).stem, "season": int(ev["season"]), "round": int(ev["round"]),
                                           "event": str(ev["event"]), "error": f"{type(err).__name__}: {err}"}
     return Path(ev_path).stem, index, detail
@@ -330,11 +311,10 @@ def js_assign(var: str, payload: Any, key: str | None = None, nd: int = 4) -> st
 
 def build_explorer(processed_dir: Path, site_dir: Path, workers: int = 8, target: str = TARGET_TEAM,
                    cache_dir: Path | None = None) -> int:
-    """Write `site/data/explorer/index.js` and one file per event; returns the number of events.
+    """Write `site/data/explorer/index.js` and one file per event; returns the number of events written.
 
-    Needs the telemetry cache (`cache_dir`, default the repository's). An event that fails is
-    listed in the index with the reason, so the page can show it; if every event fails the
-    build stops, since that means the cache is missing rather than one bad event.
+    Needs the telemetry cache (`cache_dir`, default the repository's). A failed event is listed in the index with
+    its reason; if every event fails the build stops, as that points to a missing cache rather than one bad event.
     """
     processed_dir, site_dir = Path(processed_dir), Path(site_dir)
     out = site_dir / "data" / "explorer"
@@ -360,6 +340,6 @@ def build_explorer(processed_dir: Path, site_dir: Path, workers: int = 8, target
     # Six decimals: the page adds and differences these, then rounds once for display
     (out / "index.js").write_text(js_assign("EXPLORER_INDEX", {
         "team": target, "events": index, "drivers": drivers, "names": names, "failed": failed,
-        "class_thresholds_kmh": [LOW_SPEED_MAX_KMH, HIGH_SPEED_MIN_KMH],
+        "class_thresholds_kmh": [LOW_SPEED_MAX_KMH, HIGH_SPEED_MIN_KMH], "check_labels": CHECK_LABELS, "straight_min_m": STRAIGHT_MIN_M,
     }, nd=6), encoding="utf-8")
     return len(index)

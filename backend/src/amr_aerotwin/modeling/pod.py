@@ -1,10 +1,7 @@
-"""Proper Orthogonal Decomposition (POD) of speed traces: a reduced-order model of a lap.
+"""Proper orthogonal decomposition (POD) of one event's speed traces: a reduced-order model of a lap.
 
-Stacking every driver's speed trace at one event as rows of a snapshot matrix X and taking
-the SVD of the mean-centred matrix gives orthogonal spatial modes ordered by the variance
-they explain. A handful of modes reconstruct any lap closely, and each car's modal
-coefficients become a compact description of how its speed profile differs from the field
-(for example more speed on straights but less in fast corners).
+Each lap is a row of the snapshot matrix on a shared distance grid. The modes come from the SVD of the
+mean-centred matrix, and a lap's modal coefficients describe how its speed profile differs from the field.
 """
 
 from __future__ import annotations
@@ -61,7 +58,7 @@ class PODReducedOrderModel:
 
     @staticmethod
     def _leave_one_out_rmse(x: NDArray[np.float64], k: int) -> float:
-        """Out-of-sample check: reconstruct each lap from modes fitted on the other laps."""
+        """RMS error over laps, each reconstructed from modes fitted on the others; NaN below 4 laps."""
         n = x.shape[0]
         if n < 4:
             return float("nan")

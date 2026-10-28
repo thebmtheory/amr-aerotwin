@@ -1,8 +1,7 @@
-"""Data-quality gates and model diagnostics.
+"""Data-quality checks for aligned laps and corner speeds.
 
-Every check here can fail. Thresholds are set from the observed spread on clean laps and
-are deliberately loose enough to pass normal noise but catch broken laps (wrong layout,
-pit-lane laps, GPS dropouts, mis-merged channels).
+Thresholds come from the spread on clean laps: loose enough to pass normal noise, tight enough to catch
+broken laps (wrong layout, pit-lane laps, GPS dropouts, mis-merged channels).
 """
 
 from __future__ import annotations
@@ -10,8 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import NDArray
 
-from amr_aerotwin.domain import AlignedLap
+from amr_aerotwin.domain import GRAVITY_ACCEL, AlignedLap
 from amr_aerotwin.physics.dynamics import VehicleState
 from amr_aerotwin.physics.kinematics import corner_windows, gps_spline_kinematics
 
@@ -29,7 +29,7 @@ LAP_CHECKS: dict[str, tuple[str, float, float]] = {
     "max_sample_gap_m": ("largest gap between telemetry samples (m)", 0.0, 120.0),
     # One-sided: the trap is a single point, so it may read well below the lap's peak speed
     # (2026 clipping costs 10-20 km/h before the trap; the 2025 Las Vegas trap sits ~120 km/h
-    # below peak for every car), but a trap far above the peak means a mis-merged lap.
+    # below peak for every car), but a trap far above the peak means a mis-merged lap
     "speed_trap_minus_max_kmh": ("speed trap minus telemetry peak speed (km/h)", -float("inf"), 8.0),
     "frozen_run_m": ("longest run of exactly repeated speed and rpm samples (m)", 0.0, 100.0),
     "car_data_stall_kmh": ("wheel vs GPS speed next to an impossible wheel-speed jump, vs the field (km/h)", -30.0, 30.0),
@@ -68,17 +68,29 @@ def check_lap(lap: AlignedLap) -> LapCheckResult:
     return LapCheckResult(passed=not fails, failures=fails)
 
 
-def car_data_stall_kmh(laps: dict[str, AlignedLap], step_window_m: float = 15.0) -> dict[str, float]:
-    """Per lap: wheel-minus-GPS speed (km/h, signed, relative to the field) next to an impossible jump.
+def failures_by_check(metrics: dict[str, NDArray[np.float64]]) -> dict[str, int]:
+    """How many laps each check rejects, by the same rule as `check_lap` (a lap can fail several).
 
-    In some archived laps the car-data stream stalls: speed, throttle and brake hold their last
-    values for 0.5-1.5 s while GPS shows the car braking or accelerating, then all jump at once.
-    The jump implies more than STALL_DECEL_G of braking or STALL_ACCEL_G of acceleration.
-    GPS-derived speed has errors of its own that every car shares at the same place (spline
-    smoothing through braking zones), so each lap's wheel-minus-GPS difference is taken
-    relative to the field median at the same distance and averaged over STALL_WINDOW_M. The
-    score is the largest such difference within STALL_NEAR_M of a jump; 0 when there is no
-    jump. Timestamp jitter also produces short jumps, but with no GPS disagreement around them.
+    `metrics` maps LAP_CHECKS metrics to one value per lap; checks with no values are left out.
+    """
+    out = {}
+    for metric, (_, lo, hi) in LAP_CHECKS.items():
+        if metric not in metrics:
+            continue
+        v = np.asarray(metrics[metric], dtype=float)
+        finite = np.isfinite(v)
+        bad = finite & ((v < lo) | (v > hi))
+        if metric not in OPTIONAL_CHECKS:
+            bad |= ~finite
+        out[metric] = int(bad.sum())
+    return out
+
+
+def car_data_stall_kmh(laps: dict[str, AlignedLap], step_window_m: float = 15.0) -> dict[str, float]:
+    """Per lap: wheel-minus-GPS speed (km/h, relative to the field) next to an impossible speed jump; 0 if none.
+
+    Some archived laps have car data that stalls for 0.5-1.5 s and then jumps; timestamp jitter also makes
+    jumps, but with no GPS disagreement. The field median removes GPS spline errors that all cars share.
     """
     dev = {}
     for d, lp in laps.items():
@@ -97,7 +109,7 @@ def car_data_stall_kmh(laps: dict[str, AlignedLap], step_window_m: float = 15.0)
         step = float(s[1] - s[0])
         k = max(int(round(step_window_m / step)), 1)
         a = np.zeros(len(v))
-        a[k // 2: k // 2 + len(v) - k] = (v[k:] ** 2 - v[:-k] ** 2) / (2.0 * (s[k:] - s[:-k])) / 9.81
+        a[k // 2: k // 2 + len(v) - k] = (v[k:] ** 2 - v[:-k] ** 2) / (2.0 * (s[k:] - s[:-k])) / GRAVITY_ACCEL
         w = max(int(round(STALL_WINDOW_M / step)), 1)
         resid = np.convolve(dev[d] - med, np.ones(w) / w, mode="same")
         near = int(round(STALL_NEAR_M / step))
@@ -112,13 +124,10 @@ def car_data_stall_kmh(laps: dict[str, AlignedLap], step_window_m: float = 15.0)
 
 
 def sector_time_errors_s(laps: dict[str, AlignedLap]) -> dict[str, float]:
-    """Per lap: largest error (s) of the aligned time channel at the two internal sector lines.
+    """Per lap: largest error (s) of the aligned clock at the two internal sector lines; NaN without sector times.
 
-    Official sector times come from the timing loops, independently of telemetry. The track
-    position of each sector line is the median over laps of where their own aligned clock
-    reads the official sector time; each lap's error is then its aligned time at that position
-    minus its official time. This checks the whole alignment chain (GPS lag, line crossings,
-    distance mapping) against an independent clock. NaN when sector times are missing.
+    Each line sits at the median over laps of where the aligned clock reads the official sector time, so this
+    checks the whole alignment chain against the timing loops, which are independent of telemetry.
     """
     cum = {}
     for d, lp in laps.items():
@@ -141,11 +150,8 @@ def sector_time_errors_s(laps: dict[str, AlignedLap]) -> dict[str, float]:
 def geometry_ok(turning_number: float, expected_turns: int = 1) -> bool:
     """Integrated curvature must match the circuit's turn count (GPS dropouts break this).
 
-    Most circuits make one full turn; a figure-of-eight such as Suzuka makes zero. The
-    expected count comes from the reference path's own heading (`expected_turn_count`). The
-    integral runs about 1.5% high on clean data (the smoothed GPS path cuts corners, so curvature
-    per odometer metre is slightly overestimated; per-lap mean 1.015, sd 0.019), so the band is
-    asymmetric: from 3.5% below to 5% above the turn count.
+    Suzuka's figure of eight makes zero turns. The band, 3.5% below to 5% above, is asymmetric because the
+    smoothed GPS path cuts corners and reads about 1.5% high on clean laps (per-lap mean 1.015, sd 0.019).
     """
     n = abs(expected_turns)
     if n == 0:
@@ -158,20 +164,19 @@ def expected_turn_count(x_m: np.ndarray, y_m: np.ndarray) -> int:
     heading = np.unwrap(np.arctan2(np.diff(np.append(y_m, y_m[0])), np.diff(np.append(x_m, x_m[0]))))
     return int(np.rint((heading[-1] - heading[0]) / (2 * np.pi)))
 
+
 CORNER_WINDOW_M = 60.0
-# A corner's minimum speed is used only when the wheel-speed channel and GPS-derived speed
-# agree on it. The smoothed GPS path reads low in fast corners for every car, so each car's
-# wheel-minus-GPS difference is compared with the field's median at that corner; a stuck or
-# stepping speed channel (2026 British GP: STR at Aintree) misses by 20 km/h or more. On the
-# clean laps at Silverstone the residual stays within +-14 km/h.
+# A corner's minimum speed is used only when wheel and GPS speed agree, relative to the field median there
+# (the smoothed GPS path reads low in fast corners for every car). Clean laps at Silverstone stay within
+# +-14 km/h; a stuck or stepping speed channel (2026 British GP: STR at Aintree) misses by 20 km/h or more.
 WHEEL_GPS_TOL_KMH = 15.0
 
 
 def corner_min_speeds(state: VehicleState, corner_s: np.ndarray) -> list[dict[str, float]]:
-    """Minimum speed in +-60 m of each corner from the wheel-speed channel and from GPS.
+    """Minimum speed (km/h) within +-60 m of each corner, from the wheel-speed channel and from GPS.
 
-    GPS speed comes from the same time-domain spline of raw fixes used for curvature, so it
-    is independent of the car-data stream. See `flag_corner_speeds` for the check.
+    GPS speed comes from the time-domain spline of raw fixes used for curvature, so it is independent of
+    the car-data stream; `flag_corner_speeds` compares the two.
     """
     lap = state.lap
     out = []

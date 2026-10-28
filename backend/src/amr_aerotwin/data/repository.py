@@ -1,8 +1,7 @@
 """Cached access to the public TracingInsights F1 timing archive (one GitHub repo per season).
 
-Every response is cached as JSON on disk, so after one `fetch` the whole pipeline runs
-offline and reproducibly. Raw values are returned as published; unit conversion happens in
-`alignment.py`.
+Every response is cached as JSON on disk, so after one `fetch` the pipeline runs offline and reproducibly.
+Lap telemetry is returned as published; alignment.py converts it to SI units.
 """
 
 from __future__ import annotations
@@ -68,7 +67,7 @@ class TelemetryRepository:
         env = os.environ.get("AEROTWIN_OFFLINE", "").strip().lower()
         self.offline = env in ("1", "true", "yes", "on") if offline is None else offline
 
-    # ------------------------------------------------------------------ transport
+    # Transport
     def _cache_path(self, year: int, rel_path: str) -> Path:
         return self.cache_dir / (f"{year}_" + rel_path.replace("/", "__").replace(" ", "_"))
 
@@ -110,7 +109,7 @@ class TelemetryRepository:
             removed += 1
         return removed
 
-    # ------------------------------------------------------------------ catalogue
+    # Catalogue
     def list_events(self, year: int, refresh: bool = False) -> list[str]:
         """Grand Prix folders available for `year` (testing sessions excluded).
 
@@ -127,7 +126,7 @@ class TelemetryRepository:
             _atomic_write(path, json.dumps(names))
         return [n for n in names if n.endswith("Grand Prix") and n not in NON_EVENT_DIRS]
 
-    # ------------------------------------------------------------------ tables
+    # Tables
     def session_laps(self, year: int, event: str, session: str) -> pd.DataFrame:
         """All laps of all drivers in a session, with 'None' strings converted to NaN."""
         raw = self.fetch_json(year, f"{event}/{session}/session_laptimes.json")

@@ -1,1 +1,1 @@
-"""Data ingestion, caching, and spatial grid interpolation subpackage."""
+"""Cached archive access and alignment of laps onto a shared distance grid."""

@@ -10,3 +10,6 @@ data/fastf1_cache/
 data/processed/
 site/
 build/
+
+# Personal study guide (interview prep), not part of the project
+study/

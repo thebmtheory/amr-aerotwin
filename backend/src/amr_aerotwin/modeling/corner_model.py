@@ -1,30 +1,8 @@
-"""Corner minimum-speed model across a season: physics baseline, ML, and hybrid.
+"""Corner minimum speed across seasons: steady-state limit, lap simulator, boosted trees and a hybrid.
 
-Each row is one corner on one driver's fastest qualifying lap. The target is the minimum
-speed through the corner. Features are things the driver does not control on that lap:
-corner geometry (from the multi-driver consensus path), air density, track temperature,
-tyre age and season. The target never enters a feature, which is what the original
-prototype got wrong. Headwind is not used: the timing frame's compass orientation is
-unverified (see `powertrain.wind_rotation_test`), so per-corner wind components are unreliable.
-
-Models, all evaluated with GroupKFold over *circuits* (every event at a circuit, in both
-seasons, is held out together, so the model never sees the test track):
-  steady    v^2 = a R / (1 - b rho R): the steady-state cornering limit with aero grip,
-            with (a, b) fitted on the training folds only
-  physics   the lap simulator run on the event's geometry with a nominal car whose
-            parameters are the median of the *training-fold* events' calibrations
-            (`sim_fn`; falls back to `steady` where no simulation exists). Unlike the
-            steady-state limit it knows that fast corners are reached at power-limited speed.
-  ml        gradient-boosted trees on the raw features
-  hybrid    gradient-boosted trees on the residual of `physics`
-
-Prediction intervals use split conformal calibration across folds: the interval width for
-fold k comes only from residuals on the *other* folds. Coverage is marginal: it is reported
-per event as well, because it varies a lot between tracks.
-
-Almost all of the target's variance is between corners (a hairpin vs a flat-out kink), so
-R^2 mostly measures geometry. The `within_corner_r2` metric asks the harder question:
-how well the model explains differences between cars at the *same* corner.
+One row per corner of a driver's fastest qualifying lap; features are only what the driver does not control
+on that lap. Wind is left out because the timing frame's compass orientation is unverified
+(`powertrain.wind_rotation_test`). Cross-validation holds out every event at a circuit together.
 """
 
 from __future__ import annotations
@@ -50,14 +28,14 @@ V_CAP_KMH = 345.0
 
 
 def physics_speed_kmh(radius_m: np.ndarray, rho: np.ndarray, a: float, b: float) -> np.ndarray:
-    """Steady-state cornering limit v^2 = a R / (1 - b rho R), capped where aero grip wins."""
+    """Steady-state cornering limit (km/h) from v^2 = a R / (1 - b rho R), capped where aero grip wins."""
     denom = 1.0 - b * rho * radius_m
     v2 = np.where(denom > 0.02, a * radius_m / np.maximum(denom, 0.02), (V_CAP_KMH / 3.6) ** 2)
     return np.minimum(np.sqrt(np.maximum(v2, 1.0)) * 3.6, V_CAP_KMH)
 
 
 def fit_physics(df: pd.DataFrame) -> tuple[float, float]:
-    """Fit (a = mu g, b = mu ClA / (2 m)) by robust least squares on grip-limited corners."""
+    """Fitted (a, b) = (mu g, mu ClA / (2 m)); the soft-L1 loss damps corners that are not grip-limited."""
     r, rho, v = df["radius_m"].to_numpy(), df["rho_kg_m3"].to_numpy(), df["v_min_kmh"].to_numpy()
 
     def resid(p: np.ndarray) -> np.ndarray:
@@ -83,8 +61,8 @@ def _matrix(df: pd.DataFrame, use_team: bool, teams: list[str]) -> np.ndarray:
 
 @dataclass(frozen=True)
 class CornerModelReport:
-    metrics: pd.DataFrame  # model, rmse_kmh, mae_kmh, r2 (out-of-fold)
-    oof: pd.DataFrame  # rows + physics/ml/hybrid OOF predictions
+    metrics: pd.DataFrame  # model, rmse_kmh, mae_kmh, r2, within_corner_r2 (out of fold)
+    oof: pd.DataFrame  # input rows with out-of-fold predictions, conformal half-width and fold
     conformal_coverage: float
     conformal_halfwidth_kmh: float
     coverage_by_class: dict[str, float]
@@ -101,11 +79,10 @@ def cross_validate(
     group_col: str = "circuit",
     sim_fn: Callable[[set[str]], pd.DataFrame] | None = None,
 ) -> CornerModelReport:
-    """Grouped (by circuit) cross-validation of steady, physics, ML and hybrid models.
+    """Out-of-fold predictions and metrics of the steady, physics, ML and hybrid models, grouped by circuit.
 
-    `sim_fn(train_event_keys)` returns columns (event_key, corner_key, v_sim_kmh) computed with
-    a nominal car from the training events only, so no calibration from a test event
-    reaches the physics baseline.
+    `sim_fn(train_event_keys)` returns (event_key, corner_key, v_sim_kmh) for a nominal car from the training
+    events only, so no calibration from a test event reaches the physics baseline.
     """
     df = df.reset_index(drop=True).copy()
     groups = df[group_col if group_col in df else "event_key"].to_numpy()
@@ -133,6 +110,7 @@ def cross_validate(
         oof["ml"][te] = _gbm().fit(x[tr], y[tr]).predict(x[te])
         oof["hybrid"][te] = phys_te + _gbm().fit(x[tr], y[tr] - phys_tr).predict(x[te])
 
+    # R^2 mostly measures corner geometry; within-corner R^2 scores the differences between cars at one corner
     rows = []
     cell = df["event_key"].astype(str) + "|" + df["corner_key"].astype(str)
     y_within = y - df.groupby(cell)["v_min_kmh"].transform("mean").to_numpy()
@@ -175,13 +153,12 @@ def cross_validate(
     )
 
 
-# --------------------------------------------------------------------------- team effects
+# Team effects
 def team_corner_deficit(oof: pd.DataFrame, n_boot: int = 400, seed: int = 4) -> pd.DataFrame:
-    """Corner minimum speed vs the *other* teams at the same corner (km/h), by corner class.
+    """Team's corner minimum speed minus the other teams' at the same corner (km/h), by speed class.
 
-    At one corner of one event, geometry and conditions are shared, so this is essentially a
-    like-for-like speed comparison (the model's residual cancels almost entirely once the
-    corner mean is removed). The comparison excludes the team itself. Bootstrap over events.
+    Taken on hybrid residuals, but the prediction nearly cancels at a shared corner, so this is close to a
+    like-for-like speed difference. Intervals resample events.
     """
     d = oof.assign(resid=oof["v_min_kmh"] - oof["pred_hybrid"])
     key = d["event_key"].astype(str) + "|" + d["corner_key"].astype(str)
@@ -206,18 +183,17 @@ def team_corner_deficit(oof: pd.DataFrame, n_boot: int = 400, seed: int = 4) -> 
     return pd.DataFrame(rows)
 
 
-# --------------------------------------------------------------------------- Shapley
+# Shapley attribution
 def exact_baseline_shapley(
     predict: Callable[[np.ndarray], np.ndarray],
     x: np.ndarray,
     baseline: np.ndarray,
     groups: list[list[int]],
 ) -> np.ndarray:
-    """Exact Shapley values of `predict` for each row of x, over feature *groups*.
+    """Exact baseline Shapley values of `predict`, one row per row of x and one column per feature group.
 
-    Value of a coalition S: f(x with features outside S set to the baseline). Every one of
-    the 2^M coalitions is evaluated, so the values satisfy efficiency exactly:
-    sum_j phi_j(x) = f(x) - f(baseline). Feasible for M <= ~12 groups.
+    A coalition's value is f(x) with the features outside it set to the baseline. All 2^M coalitions are
+    evaluated, so each row sums to f(x) - f(baseline) exactly; practical up to about 12 groups.
     """
     m = len(groups)
     n = x.shape[0]
@@ -240,10 +216,10 @@ def exact_baseline_shapley(
 
 
 def hybrid_shapley(df: pd.DataFrame, rows: np.ndarray) -> tuple[pd.DataFrame, list[str]]:
-    """Exact Shapley attribution of the reported hybrid model (lap-sim prior + boosted residual).
+    """Exact Shapley values (km/h) of the hybrid model (lap-sim prior plus boosted residual) at `rows`.
 
-    Groups: the physics prior `v_sim_kmh` (one group) and each remaining feature. The model is
-    refitted on all rows for attribution; validation numbers come from `cross_validate`.
+    Groups are the prior `v_sim_kmh` and each feature. The model is refitted on all rows for attribution;
+    its validation comes from `cross_validate`.
     """
     d = df[df["v_sim_kmh"].notna()].reset_index(drop=True) if "v_sim_kmh" in df else df
     if "v_sim_kmh" not in d or d.empty:

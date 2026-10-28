@@ -1,1 +1,1 @@
-"""Physics and vehicle dynamics subpackage."""
+"""Track geometry, vehicle state, grip estimation and the point-mass lap simulator."""

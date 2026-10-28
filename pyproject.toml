@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Track-data vehicle science for F1: physics-based lap simulation, calibration, grip and energy analysis from public timing data"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "thebmtheory" }]
+authors = [{ name = "Balaji Murugan", email = "thebm.theory@gmail.com" }]
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.2",

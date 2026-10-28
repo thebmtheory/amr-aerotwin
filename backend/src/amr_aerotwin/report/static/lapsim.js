@@ -3,7 +3,7 @@
 (function (root) {
   "use strict";
   var G = 9.80665;
-  var V_CAP = 110.0;
+  var V_CAP = 110.0;  // m/s (396 km/h): numerical cap on the corner-limit speed
 
   function maxCorneringSpeed(kappa, p) {
     var out = new Float64Array(kappa.length);
@@ -57,6 +57,7 @@
       cda[i] = lowDragMask && p.low_drag_cda_m2 != null && lowDragMask[i] ? p.low_drag_cda_m2 : p.cda_m2;
     }
     var vap = maxCorneringSpeed(kappa, p);
+    // Run two laps and keep the converged half of each pass, so the start speed matches the end speed
     var k2 = new Float64Array(2 * n), c2 = new Float64Array(2 * n), va2 = new Float64Array(2 * n);
     for (i = 0; i < 2 * n; i++) { k2[i] = Math.abs(kappa[i % n]); c2[i] = cda[i % n]; va2[i] = vap[i % n]; }
     var res = passes(k2, c2, va2, ds, p);

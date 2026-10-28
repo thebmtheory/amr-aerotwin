@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.interpolate import make_smoothing_spline
+from scipy.interpolate import BSpline, make_smoothing_spline
 from scipy.signal import savgol_filter
 
 from amr_aerotwin.domain import (
@@ -15,6 +15,14 @@ from amr_aerotwin.domain import (
     R_SPECIFIC_WATER_VAPOUR,
     AmbientState,
 )
+
+GPS_LAM = 0.2  # time-smoothing penalty of the GPS position splines; events re-select it
+MIN_GPS_FIXES = 50  # with fewer real fixes a lap's GPS-based estimates are skipped
+
+
+def odd_window(length_m: float, step_m: float) -> int:
+    """Savitzky-Golay window in samples for a length in metres: odd, and at least 5."""
+    return max(5, int(round(length_m / step_m)) | 1)
 
 
 def saturation_vapour_pressure_pa(temp_c: float) -> float:
@@ -66,14 +74,13 @@ def path_curvature(
     y_m: NDArray[np.float64],
     smooth_window_m: float = 55.0,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Heading and curvature of a closed lap after periodic Savitzky-Golay smoothing of X/Y.
+    """Heading (rad) and curvature (1/m) of a closed lap after periodic Savitzky-Golay smoothing of X/Y.
 
-    GPS positions arrive at ~4 Hz, so the second derivative is noisy without smoothing. A
-    ~55 m window keeps the apex radius of slow hairpins (R ~ 15-20 m) within a few percent
-    while suppressing jitter (checked by `turning_number`).
+    GPS fixes arrive at ~4 Hz, so the second derivative needs smoothing; the default 55 m window keeps the
+    apex radius of slow hairpins (R ~ 15-20 m) within a few percent (`turning_number` checks the result).
     """
     step = float(distance_m[1] - distance_m[0])
-    w = max(5, int(round(smooth_window_m / step)) | 1)
+    w = odd_window(smooth_window_m, step)
     xs = savgol_filter(x_m, w, 3, mode="wrap")
     ys = savgol_filter(y_m, w, 3, mode="wrap")
     return compute_track_heading_and_curvature(distance_m, xs, ys, closed=True)
@@ -87,8 +94,8 @@ def gps_position_splines(
     fix_x_m: NDArray[np.float64],
     fix_y_m: NDArray[np.float64],
     lap_time_s: float,
-    lam: float = 0.2,
-):  # -> tuple[BSpline, BSpline]
+    lam: float = GPS_LAM,
+) -> tuple[BSpline, BSpline]:
     """Smoothing splines x(t), y(t) through raw GPS fixes, periodically extended by one lap.
 
     Fix times are wrapped into one lap first: after a lap is re-timed to its line crossings a
@@ -112,13 +119,12 @@ def gps_spline_kinematics(
     fix_y_m: NDArray[np.float64],
     lap_time_s: float,
     eval_time_s: NDArray[np.float64],
-    lam: float = 0.2,
+    lam: float = GPS_LAM,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Curvature and GPS-derived speed from raw ~4 Hz fixes, smoothed in *time*.
+    """Curvature (1/m) and GPS speed (m/s) at `eval_time_s`, from raw ~4 Hz fixes smoothed in time.
 
-    Position error is roughly constant per fix, so smoothing x(t), y(t) gives lateral
-    acceleration noise that does not grow with speed (smoothing in distance over-smooths
-    hairpins and under-smooths 300 km/h corners). Returns (kappa at eval times, |v_gps|).
+    Position error is roughly constant per fix, so smoothing x(t), y(t) keeps lateral-acceleration noise
+    from growing with speed; smoothing in distance over-smooths hairpins and under-smooths 300 km/h corners.
     """
     sx, sy = gps_position_splines(fix_time_s, fix_x_m, fix_y_m, lap_time_s, lam)
     dx, dy = sx(eval_time_s, 1), sy(eval_time_s, 1)
@@ -132,11 +138,10 @@ def select_gps_smoothing(
     laps: Sequence[tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], float, NDArray[np.float64], NDArray[np.float64]]],
     candidates: Sequence[float] = GPS_SMOOTHING_CANDIDATES,
 ) -> tuple[float, dict[float, float]]:
-    """Choose the time-smoothing penalty that best reproduces the independent speed sensor.
+    """Time-smoothing penalty that best reproduces wheel speed from GPS, and each candidate's score.
 
-    Each lap tuple is (fix_t, fix_x, fix_y, lap_time, grid_t, measured_speed). The score
-    is the median over laps of the RMS difference between GPS-derived speed and the
-    wheel-speed channel: too little smoothing amplifies GPS noise, too much cuts corners.
+    Laps are (fix_t, fix_x, fix_y, lap_time, grid_t, measured_speed); a score is the median over laps of the
+    RMS speed difference (m/s). Too little smoothing amplifies GPS noise, too much cuts corners.
     """
     scores: dict[float, float] = {}
     for lam in candidates:
@@ -152,13 +157,13 @@ def consensus_curvature(curvatures: Sequence[NDArray[np.float64]]) -> NDArray[np
     """Point-wise median curvature across many drivers' laps of the same layout.
 
     Racing lines at one event differ by well under a metre, while single-lap GPS noise is
-    larger, so the median over ~20 laps is a far better estimate of the driven path.
+    larger, so the median over ~20 laps is a better estimate of the driven path.
     """
     return np.median(np.vstack(list(curvatures)), axis=0)
 
 
 def turning_number(curvature_inv_m: NDArray[np.float64], step_m: float) -> float:
-    """Total heading change / 2pi. A clean closed lap must give +1 (anticlockwise) or -1."""
+    """Total heading change / 2pi: +1 anticlockwise, -1 clockwise, 0 for a figure of eight such as Suzuka."""
     return float(np.sum(curvature_inv_m) * step_m / (2.0 * np.pi))
 
 
@@ -167,14 +172,10 @@ def decompose_aero_wind_vectors(
     heading_rad: NDArray[np.float64],
     ambient: AmbientState,
 ) -> dict[str, NDArray[np.float64]]:
-    """Project ambient wind onto the car axes.
+    """Headwind, crosswind, airspeed (m/s) and aero yaw angle (deg) from the ambient wind.
 
-    Wind blowing FROM compass bearing theta moves the air towards (-sin theta, -cos theta)
-    in (East, North). With car tangent t = (cos psi, sin psi) and left normal n = (-sin psi,
-    cos psi):
-      headwind   = -(w . t)            (+ opposes the car, raising airspeed)
-      crosswind  = -(w . n)            (+ means air arriving from the car's left)
-      yaw angle  = atan2(crosswind, v + headwind)
+    Wind blowing FROM bearing theta moves the air along -(sin theta, cos theta) in (East, North).
+    Headwind > 0 opposes the car (raising airspeed); crosswind > 0 is air arriving from the car's left.
     """
     theta = np.radians(ambient.wind_direction_deg)
     w_x = -ambient.wind_speed_ms * np.sin(theta)
@@ -193,11 +194,10 @@ def decompose_aero_wind_vectors(
 
 def nearest_corner(distance_m: NDArray[np.float64], corner_distance_m: NDArray[np.float64],
                    lap_length_m: float) -> tuple[NDArray[np.int64], NDArray[np.float64]]:
-    """For every grid point: index of the nearest corner marker and the signed distance to it (m).
+    """Nearest corner marker index and signed distance to it (m, + past the marker) per grid point.
 
-    Splitting the track by nearest marker gives each piece of track to one corner only, so two
-    corners closer than their window widths share the track at the midpoint instead of one of
-    them taking it all (or both counting it).
+    Splitting by nearest marker gives each point to one corner only, so two corners closer than their
+    window widths share the track at the midpoint rather than one taking it all or both counting it.
     """
     s = np.asarray(distance_m, dtype=float)
     c = np.asarray(corner_distance_m, dtype=float)

@@ -1,8 +1,7 @@
-"""Season-level performance: qualifying gaps, car vs driver variance, pace changepoints and
-upgrade effects.
+"""Season statistics: qualifying gaps, car vs driver variance, pace changepoints and upgrade effects.
 
-Pace metric: the "supertime" gap, team best qualifying lap as % slower than the fastest lap
-of the event. Percentages make tracks of different lap length comparable.
+The pace metric is the supertime gap, a team's best qualifying lap as % slower than the event's fastest
+lap, which makes tracks of different length comparable.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ import pandas as pd
 from amr_aerotwin.modeling.intervals import boot_ci
 
 
-# --------------------------------------------------------------------------- supertimes
+# Supertimes
 def supertime_table(quali: pd.DataFrame) -> pd.DataFrame:
     """Team-best gap to the fastest lap (%) per event.
 
@@ -28,7 +27,7 @@ def supertime_table(quali: pd.DataFrame) -> pd.DataFrame:
     return team.sort_values(["season", "round", "gap_pct"]).reset_index(drop=True)
 
 
-# --------------------------------------------------------------------------- car vs driver
+# Car vs driver
 @dataclass(frozen=True)
 class VarianceSplit:
     car_share: float  # pooled: mean between-team component / mean total
@@ -58,11 +57,10 @@ def _anova_components(df: pd.DataFrame) -> tuple[float, float] | None:
 
 
 def car_vs_driver_variance(quali: pd.DataFrame, n_boot: int = 500, seed: int = 2) -> VarianceSplit:
-    """Between-team share of qualifying-gap variance (car, plus how drivers sort into teams)
-    vs within-team share (driver, lap execution, session and track evolution).
+    """Between-team share of qualifying-gap variance: the car, plus how drivers sort into teams.
 
-    Components are estimated per event (so track effects cancel) and averaged; the
-    bootstrap resamples events.
+    The within-team rest is driver, lap execution and session evolution. Components are estimated per
+    event, so track effects cancel, then averaged; the bootstrap resamples events.
     """
     best = quali.groupby(["season", "round"])["lap_time_s"].transform("min")
     q = quali.assign(gap_pct=(quali["lap_time_s"] / best - 1.0) * 100.0)
@@ -87,7 +85,7 @@ def car_vs_driver_variance(quali: pd.DataFrame, n_boot: int = 500, seed: int = 2
     )
 
 
-# --------------------------------------------------------------------------- changepoint
+# Changepoints
 def log_marginal_likelihood(x: np.ndarray, y: np.ndarray, g: float = 10.0, a0: float = 1.0, b0: float = 1.0) -> float:
     """Exact log evidence of a Bayesian linear model with a normal-inverse-gamma prior.
 
@@ -118,7 +116,7 @@ class ChangepointResult:
     p_no_change: float
     map_index: int | None
     map_probability: float  # posterior probability of the single most likely location
-    effect_mean_pct: float  # step averaged over the posterior of tau, given a change (- = faster)
+    effect_mean_pct: float  # step averaged over the posterior of tau, given a change (negative = faster)
     effect_ci90_pct: tuple[float, float]
     effect_avg_pct: float = float("nan")  # step averaged over all models, no change (step 0) included
     effect_avg_ci90_pct: tuple[float, float] = (float("nan"), float("nan"))
@@ -150,10 +148,8 @@ def bayesian_changepoint(
 ) -> ChangepointResult:
     """Single mean-shift changepoint with exact model evidence for every location.
 
-    Models: M0 y = a + b x + e;  M_tau y = a + b x + d 1[i >= tau] + e. Prior mass
-    `prior_no_change` on M0, the rest uniform over admissible tau. The reported step is
-    averaged over the posterior of tau (not conditioned on the most likely tau), so its
-    interval includes the uncertainty about *where* the change happened.
+    M0: y = a + b x + e; M_tau adds d 1[i >= tau]. M0 has prior mass `prior_no_change` and tau is otherwise
+    uniform. The step is averaged over the posterior of tau, so its interval includes where the change happened.
     """
     y = np.asarray(y, float)
     n = len(y)
@@ -211,12 +207,10 @@ def _logsumexp(v: np.ndarray) -> float:
 def changepoint_count_evidence(
     y: np.ndarray, covariate: np.ndarray | None = None, min_segment: int = 3, g: float = 10.0,
 ) -> dict[str, object]:
-    """Evidence for zero, one or two mean shifts, each averaged uniformly over its admissible locations.
+    """Log evidence and Bayes factors for zero, one or two mean shifts, each averaged over its locations.
 
-    A season that rises and then falls back (a mid-season peak) can make a single step look
-    convincing; comparing against two steps shows whether one step is the better description.
-    Returns log evidences, Bayes factors and the most likely pair of change locations with
-    the two steps (posterior means, in the units of y).
+    Two steps check a mid-season peak, which can make one step look convincing. Also returns the most
+    likely pair of locations and their steps (posterior means, units of y).
     """
     y = np.asarray(y, float)
     n = len(y)
@@ -227,7 +221,9 @@ def changepoint_count_evidence(
         c = np.asarray(covariate, float)
         base.append((c - c.mean()) / (c.std() if c.std() > 0 else 1.0))
     x0 = np.column_stack(base)
-    step = lambda t: (np.arange(n) >= t).astype(float)  # noqa: E731
+    def step(t: int) -> np.ndarray:
+        return (np.arange(n) >= t).astype(float)
+
     taus = list(range(min_segment, n - min_segment + 1))
     pairs = [(a, b) for a in taus for b in taus if b - a >= min_segment]
     lml0 = log_marginal_likelihood(x0, z, g=g)
@@ -248,7 +244,7 @@ def changepoint_count_evidence(
     return out
 
 
-# --------------------------------------------------------------------------- upgrades (DiD)
+# Upgrades (difference in differences)
 @dataclass(frozen=True)
 class UpgradeEffect:
     season: int
@@ -271,15 +267,19 @@ class UpgradeEffect:
     n_time_placebos: int = 0
 
 
-def permutation_mde_sd(n_placebos: int, alpha: float = 0.10, power: float = 0.80) -> float:
-    """Smallest effect, in units of the estimate's noise sd, that a two-sided permutation test
-    against `n_placebos` placebos detects with the given power.
+# Upgrade tests. The detectable effect is quoted at MDE_POWER power and level MDE_ALPHA; team
+# placebos stop being a fair reference once the treated team's own estimates are NOISE_RATIO_MAX
+# times as noisy as its rivals'.
+MDE_ALPHA = 0.10
+MDE_POWER = 0.80
+NOISE_RATIO_MAX = 1.5
 
-    p = (1 + #{|placebo| >= |effect|}) / (1 + N), so rejecting at `alpha` allows at most
-    k = floor(alpha (1 + N)) - 1 placebos as extreme as the effect. With the effect estimate
-    ~ N(delta, 1) and placebos ~ N(0, 1), P(reject | e) = P(Binomial(N, q(e)) <= k) with
-    q(e) = 2 Phi(-|e|); the power is its average over e. With ten placebos this needs about
-    2.9 sd (not the normal-theory 2.5), and below 1 / alpha - 1 placebos nothing is detectable.
+
+def permutation_mde_sd(n_placebos: int, alpha: float = MDE_ALPHA, power: float = MDE_POWER) -> float:
+    """Smallest effect (noise sd) a two-sided permutation test on `n_placebos` placebos detects with `power`.
+
+    Rejecting at `alpha` allows at most k = floor(alpha (1 + N)) - 1 placebos as extreme as the effect, so the
+    power is P(Binomial(N, 2 Phi(-|e|)) <= k) averaged over e ~ N(delta, 1); infinite when k < 0.
     """
     from scipy import stats as st
     from scipy.integrate import trapezoid
@@ -301,11 +301,10 @@ def permutation_mde_sd(n_placebos: int, alpha: float = 0.10, power: float = 0.80
 
 
 def _did_estimate(panel: pd.DataFrame, treated_team: str, start_round: int, window: int) -> tuple[float, int, int] | None:
-    """Two-way fixed-effects DiD on rounds within +-window of `start_round`.
+    """Two-way fixed-effects DiD (delta, n_pre, n_post) on rounds within +-window of `start_round`.
 
-    gap(team, event) = team FE + event FE + team-specific track-type slope + delta * treated.
-    Event fixed effects absorb anything common to all teams at a venue; the team-specific
-    slope on the event's high-speed share controls for cars that suit some layouts.
+    gap = team FE + event FE + team slope on the event's high-speed share + delta * treated; the slope
+    allows for cars that suit some layouts.
     """
     rounds = sorted(panel["round"].unique())
     if start_round not in rounds:
@@ -340,11 +339,10 @@ def upgrade_effects(
     treated_team: str,
     window: int = 4,
 ) -> list[UpgradeEffect]:
-    """DiD effect of each declared upgrade with permutation (placebo) inference.
+    """DiD effect of each declared upgrade, with team and time placebo p-values.
 
-    `panel`: season, round, event, team, gap_pct[, track_x]. `upgrades`: season, event.
-    Team placebos pretend each rival brought the upgrade on the same date; time placebos
-    move the treated date to every other admissible round of the same season.
+    `panel`: season, round, event, team, gap_pct[, track_x]; `upgrades`: season, event. Team placebos give the
+    upgrade date to each rival in turn; time placebos move it to every other admissible round of the season.
     """
     out = []
     for _, up in upgrades.iterrows():
@@ -379,10 +377,9 @@ def upgrade_effects(
         sd_pl = float(np.std(team_pl, ddof=1)) if len(team_pl) > 2 else float("nan")
         sd_time = float(np.std(time_pl, ddof=1)) if len(time_pl) > 2 else float("nan")
         ratio = sd_time / sd_pl if sd_pl > 0 else float("nan")
-        # Team placebos are a valid reference only if the treated team's own estimates are about
-        # as noisy as its rivals'. When they are much noisier, beating every rival says little, and
-        # the treated team's own estimates at other dates (time placebos) are the right null.
-        lead = "time" if np.isfinite(ratio) and ratio > 1.5 else "team"
+        # Team placebos are a fair reference only if the treated team is about as noisy as its rivals;
+        # when it is much noisier, its own estimates at other dates (time placebos) are the right null
+        lead = "time" if np.isfinite(ratio) and ratio > NOISE_RATIO_MAX else "team"
         n_lead = len(time_pl) if lead == "time" else len(team_pl)
         noise = max(v for v in (sd_pl, sd_time) if np.isfinite(v)) if np.isfinite(sd_pl) or np.isfinite(sd_time) else float("nan")
         out.append(UpgradeEffect(
