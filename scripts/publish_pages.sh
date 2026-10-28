@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 
 [ -f site/.aerotwin-site ] || { echo "no built site in site/; run make report first" >&2; exit 1; }
 git_dir=$(git rev-parse --absolute-git-dir)
+source=$(git describe --always --dirty)  # before the private index below, which would make it look dirty
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export GIT_INDEX_FILE="$tmp/index"
@@ -22,7 +23,7 @@ if [ -n "$parent" ] && [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
   echo "gh-pages already has this site"
   exit 0
 fi
-commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "Report built from $(git describe --always --dirty)")
+commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "Report built from $source")
 git update-ref refs/heads/gh-pages "$commit"
 git push -q origin gh-pages
 echo "published $(git rev-parse --short "$commit") to gh-pages"
