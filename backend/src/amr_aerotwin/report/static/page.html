@@ -614,12 +614,21 @@
       <div class="author-id">
         <p class="label">About the author</p>
         <h2 class="author-name" id="author-name"><!--author-name--></h2>
+        <p class="author-degree"><!--author-degree--></p>
         <p class="author-line"><!--author-line--></p>
       </div>
       <dl class="author-dl">
         <div>
           <dt>Email</dt>
-          <dd class="contact"><a class="addr" href="mailto:<!--author-email-->"><!--author-email--></a><button type="button" class="copy" data-copy="<!--author-email-->" aria-live="polite">Copy</button></dd>
+          <dd class="contact"><a class="addr" href="mailto:<!--author-email-->"><!--author-email--></a><button type="button" class="copy" data-copy="<!--author-email-->" aria-label="Copy email address" aria-live="polite">Copy</button></dd>
+        </div>
+        <div>
+          <dt>Phone</dt>
+          <dd class="contact"><a class="addr" href="tel:<!--author-tel-->"><!--author-phone--></a><button type="button" class="copy" data-copy="<!--author-phone-->" aria-label="Copy phone number" aria-live="polite">Copy</button></dd>
+        </div>
+        <div>
+          <dt>GitHub</dt>
+          <dd class="contact"><a class="addr" href="<!--author-repo-->" rel="noopener"><!--author-repo-label--></a></dd>
         </div>
         <div>
           <dt>Built with</dt>

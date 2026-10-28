@@ -20,7 +20,11 @@ from amr_aerotwin.report.note import headline
 STATIC = Path(__file__).parent / "static"
 MARKER = ".aerotwin-site"  # written into every built site; only such folders are ever replaced
 HEADLINE_SLOT = "<!--headline-->"  # the line under page.html's title, filled from the results so the claim cannot drift
-AUTHOR_SLOTS = {"<!--author-name-->": AUTHOR.name, "<!--author-email-->": AUTHOR.email, "<!--author-line-->": AUTHOR.line}
+AUTHOR_SLOTS = {
+    "<!--author-name-->": AUTHOR.name, "<!--author-degree-->": AUTHOR.degree, "<!--author-line-->": AUTHOR.line,
+    "<!--author-email-->": AUTHOR.email, "<!--author-phone-->": AUTHOR.phone, "<!--author-tel-->": AUTHOR.tel,
+    "<!--author-repo-->": AUTHOR.repo, "<!--author-repo-label-->": AUTHOR.repo_label,
+}
 
 # Keys of the per-event summary that the site uses (keeps the files small)
 EVENT_KEYS = [

@@ -376,6 +376,7 @@ ul.small li + li { margin-top: 6px; }
 .author-id { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .author-name { position: relative; padding-top: 28px; font-size: clamp(2.75rem, 6vw, 5.25rem); font-weight: 200; line-height: 1; letter-spacing: -0.025em; }
 .author-name::before { content: ""; position: absolute; left: 0; top: 0; width: 72px; height: 2px; background: var(--amr); transform-origin: left center; }
+.author-degree { margin-top: -8px; font-size: 1.125rem; font-weight: 500; line-height: 1.4; color: var(--ink); }
 .author-line { font-size: 1.125rem; line-height: 1.55; color: var(--ink-2); max-width: 44ch; }
 .footer.arrived .author-name { animation: land 1.6s ease-out; }
 .footer.arrived .author-name::before { animation: draw 0.9s cubic-bezier(0.2, 0.7, 0.2, 1); }

@@ -1862,13 +1862,15 @@
     document.querySelectorAll('a[href="#author"]').forEach(function (a) {
       a.addEventListener("click", function () { if (onScreen()) arrive(); else waiting = true; });
     });
-    // Mail links don't open everywhere the page is shown, so the address is plain text with a copy button
-    var btn = box.querySelector(".copy"), addr = box.querySelector(".addr");
-    if (btn && addr) btn.addEventListener("click", function () {
-      function say(t) { btn.textContent = t; clearTimeout(say.t); say.t = setTimeout(function () { btn.textContent = "Copy"; }, 2000); }
+    // Mail and phone links need an app to open them, so each address also has a copy button
+    box.querySelectorAll(".copy").forEach(function (btn) {
+      var addr = btn.parentNode.querySelector(".addr"), timer;
+      function say(t) { btn.textContent = t; clearTimeout(timer); timer = setTimeout(function () { btn.textContent = "Copy"; }, 2000); }
       function select() { var r = document.createRange(), s = window.getSelection(); r.selectNodeContents(addr); s.removeAllRanges(); s.addRange(r); say("Selected"); }
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(btn.getAttribute("data-copy")).then(function () { say("Copied"); }, select);
-      else select();
+      btn.addEventListener("click", function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(btn.getAttribute("data-copy")).then(function () { say("Copied"); }, select);
+        else select();
+      });
     });
   }
 

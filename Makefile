@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 export PYTHONPATH := backend/src
 
-.PHONY: install test lint fetch build analyse report all serve figures
+.PHONY: install test lint fetch build analyse report all serve pages figures
 
 install:
 	python3 -m venv .venv && $(PY) -m pip install -e ".[dev]"
@@ -30,6 +30,10 @@ all:
 
 serve:
 	$(PY) -m http.server 8765 --directory site
+
+# Publish the built site to the gh-pages branch, which GitHub Pages serves (run `make report` first)
+pages:
+	scripts/publish_pages.sh
 
 # README images from the served site (needs Google Chrome and Node 22+; run `make serve` first)
 figures:

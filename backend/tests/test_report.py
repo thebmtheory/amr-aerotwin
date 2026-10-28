@@ -77,8 +77,11 @@ def test_author_details_are_filled_in_from_one_place(tmp_path):
     (proc / "season.json").write_text("{}")
     site = build_site(proc, tmp_path / "site")
     static = (JS.parent / "page.html").read_text()
-    for name, text in (("name", AUTHOR.name), ("email", AUTHOR.email), ("line", AUTHOR.line)):
+    filled = {"name": AUTHOR.name, "degree": AUTHOR.degree, "email": AUTHOR.email, "phone": AUTHOR.phone,
+              "tel": AUTHOR.tel, "line": AUTHOR.line, "repo": AUTHOR.repo}
+    for name, text in filled.items():
         assert f"<!--author-{name}-->" in static and text not in static, name
+    assert re.fullmatch(r"\+\d{8,15}", AUTHOR.tel)  # a dialable tel: target
     name = html.escape(AUTHOR.name)
     for page in ("index.html", "page.html"):
         out = (site / page).read_text()
@@ -86,7 +89,10 @@ def test_author_details_are_filled_in_from_one_place(tmp_path):
         assert re.search(r'<a class="byline" href="#author">.*?' + re.escape(name), out), page  # top right, jumps down
         foot = out[out.index('id="author"'):]
         assert f'id="author-name">{name}</h2>' in foot and html.escape(AUTHOR.line) in foot
-        assert f'data-copy="{html.escape(AUTHOR.email)}"' in foot
+        assert f'<p class="author-degree">{html.escape(AUTHOR.degree)}</p>' in foot
+        assert f'data-copy="{html.escape(AUTHOR.email)}"' in foot and f'data-copy="{html.escape(AUTHOR.phone)}"' in foot
+        assert f'href="tel:{AUTHOR.tel}">{html.escape(AUTHOR.phone)}</a>' in foot
+        assert f'href="{AUTHOR.repo}" rel="noopener">{AUTHOR.repo_label}</a>' in foot
         assert f'<meta name="author" content="{name}">' in out
     head = (site / "index.html").read_text().split("<body>")[0]
     assert '<link rel="icon" href="favicon.svg"' in head and f'content="{name}"' in head

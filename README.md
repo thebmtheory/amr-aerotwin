@@ -7,7 +7,7 @@ time, why, and what each fix would be worth. It covers every Grand Prix of 2025 
 far whose archived telemetry is usable, with a calibrated lap simulator, statistical models
 validated out of sample, and an interactive report.
 
-**Read first:** the [technical note](docs/technical_note.md), regenerated from the results on every run, and the report (`make report && make serve`, then open <http://localhost:8765>).
+**Read first:** the [report](https://thebmtheory.github.io/amr-aerotwin/) and the [technical note](docs/technical_note.md), both generated from the results. To open the report locally: `make report && make serve`, then <http://localhost:8765>.
 
 **The report** is one page in four parts:
 - **What I found:** the findings, each with the method behind it, and the evidence for each.
@@ -86,6 +86,8 @@ make serve
 ```
 
 `make all` fetches about 40 events (around 130 MB, cached under `data/telemetry_cache`), processes them in parallel and runs the season analyses (two to three minutes on a laptop after the download). It then writes the report (`site/`, with the per-track data under `site/data/explorer/`), `docs/technical_note.md` and the findings in this README. After the first fetch everything runs offline, and two runs give identical results. The tests need no network: they use a small Silverstone 2025 fixture in `backend/tests/fixtures`. `make lint` runs ruff and mypy.
+
+`make pages` publishes the built `site/` to the `gh-pages` branch, which GitHub Pages serves. The Refresh report workflow does the same from a fresh fetch when it is run from the Actions tab.
 
 ## How it is tested
 
