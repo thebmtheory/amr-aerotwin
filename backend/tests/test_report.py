@@ -78,7 +78,7 @@ def test_author_details_are_filled_in_from_one_place(tmp_path):
     site = build_site(proc, tmp_path / "site")
     static = (JS.parent / "page.html").read_text()
     filled = {"name": AUTHOR.name, "degree": AUTHOR.degree, "email": AUTHOR.email, "phone": AUTHOR.phone,
-              "tel": AUTHOR.tel, "line": AUTHOR.line, "repo": AUTHOR.repo}
+              "tel": AUTHOR.tel, "linkedin": AUTHOR.linkedin, "line": AUTHOR.line, "repo": AUTHOR.repo}
     for name, text in filled.items():
         assert f"<!--author-{name}-->" in static and text not in static, name
     assert re.fullmatch(r"\+\d{8,15}", AUTHOR.tel)  # a dialable tel: target
@@ -92,6 +92,7 @@ def test_author_details_are_filled_in_from_one_place(tmp_path):
         assert f'<p class="author-degree">{html.escape(AUTHOR.degree)}</p>' in foot
         assert f'data-copy="{html.escape(AUTHOR.email)}"' in foot and f'data-copy="{html.escape(AUTHOR.phone)}"' in foot
         assert f'href="tel:{AUTHOR.tel}">{html.escape(AUTHOR.phone)}</a>' in foot
+        assert f'href="{AUTHOR.linkedin}" rel="noopener">{AUTHOR.linkedin_label}</a>' in foot
         assert f'href="{AUTHOR.repo}" rel="noopener">{AUTHOR.repo_label}</a>' in foot
         assert f'<meta name="author" content="{name}">' in out
     head = (site / "index.html").read_text().split("<body>")[0]

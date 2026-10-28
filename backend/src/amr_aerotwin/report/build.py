@@ -23,6 +23,7 @@ HEADLINE_SLOT = "<!--headline-->"  # the line under page.html's title, filled fr
 AUTHOR_SLOTS = {
     "<!--author-name-->": AUTHOR.name, "<!--author-degree-->": AUTHOR.degree, "<!--author-line-->": AUTHOR.line,
     "<!--author-email-->": AUTHOR.email, "<!--author-phone-->": AUTHOR.phone, "<!--author-tel-->": AUTHOR.tel,
+    "<!--author-linkedin-->": AUTHOR.linkedin, "<!--author-linkedin-label-->": AUTHOR.linkedin_label,
     "<!--author-repo-->": AUTHOR.repo, "<!--author-repo-label-->": AUTHOR.repo_label,
 }
 
